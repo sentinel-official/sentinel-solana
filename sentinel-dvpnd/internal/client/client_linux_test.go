@@ -35,6 +35,16 @@ table inet sentinel-dvpn-c0 {
     ip daddr 169.254.0.0/16 accept
     ip6 daddr fe80::/10 accept
     }
+  chain input {
+    type filter hook input priority 0; policy drop;
+    iif "lo" accept
+    ct state established,related accept
+    iifname "dvpn-c0" accept
+    udp dport { 68, 546 } accept
+    ip saddr 169.254.0.0/16 accept
+    ip6 saddr fe80::/10 accept
+    icmpv6 type { nd-neighbor-solicit, nd-neighbor-advert, nd-router-advert } accept
+    }
 }
 `
 	require.Equal(t, want, client.RenderNftRuleset("sentinel-dvpn-c0", "dvpn-c0", nodeAddrs, rpcAndWSAddrs, false))
@@ -50,4 +60,18 @@ func TestRenderNftRuleset_BlocksLANByDefault(t *testing.T) {
 	require.Contains(t, rules, "ip daddr 203.0.113.1 accept")
 	require.Contains(t, rules, "policy drop")
 	require.NotContains(t, rules, "10.0.0.0/8")
+}
+
+func TestRenderNftRuleset_InboundChain(t *testing.T) {
+	t.Parallel()
+
+	off := client.RenderNftRuleset("sentinel-dvpn-c0", "dvpn-c0", nil, nil, false)
+	require.Contains(t, off, "type filter hook input priority 0; policy drop;")
+	require.Contains(t, off, "ct state established,related accept")
+	require.NotContains(t, off, "ip saddr { 10.0.0.0/8")
+	require.NotContains(t, off, "ip6 saddr fc00::/7")
+
+	on := client.RenderNftRuleset("sentinel-dvpn-c0", "dvpn-c0", nil, nil, true)
+	require.Contains(t, on, "ip saddr { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16 } accept")
+	require.Contains(t, on, "ip6 saddr fc00::/7 accept")
 }

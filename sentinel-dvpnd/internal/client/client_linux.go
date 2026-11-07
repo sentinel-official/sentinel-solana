@@ -24,6 +24,18 @@ table inet {{ .Table }} {
     ip6 daddr fe80::/10 accept
     {{ if .AllowLAN }}ip daddr { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16 } accept
     {{ end }}}
+  chain input {
+    type filter hook input priority 0; policy drop;
+    iif "lo" accept
+    ct state established,related accept
+    {{ if .Iface }}iifname "{{ .Iface }}" accept
+    {{ end }}udp dport { 68, 546 } accept
+    ip saddr 169.254.0.0/16 accept
+    ip6 saddr fe80::/10 accept
+    icmpv6 type { nd-neighbor-solicit, nd-neighbor-advert, nd-router-advert } accept
+    {{ if .AllowLAN }}ip saddr { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16 } accept
+    ip6 saddr fc00::/7 accept
+    {{ end }}}
 }
 `
 
