@@ -116,7 +116,8 @@ func TestParseError(t *testing.T) {
 		is     error
 	}{
 		{"known code", `{"error":{"code":"session_not_found","message":"gone"}}`, 404, api.ErrSessionNotFound},
-		{"unknown code", `{"error":{"code":"made_up","message":"x"}}`, 502, api.ErrUnexpectedStatus},
+		{"unknown code", `{"error":{"code":"made_up","message":"x"}}`, 502, &api.Error{Code: "made_up"}},
+		{"malformed code", `{"error":{"code":"Made Up","message":"x"}}`, 502, api.ErrUnexpectedStatus},
 		{"long message", `{"error":{"code":"session_not_found","message":"` + long + `"}}`, 404, api.ErrUnexpectedStatus},
 		{"control byte", `{"error":{"code":"session_not_found","message":"a\u001bb"}}`, 404, api.ErrUnexpectedStatus},
 		{"not json", `not json`, 502, api.ErrUnexpectedStatus},

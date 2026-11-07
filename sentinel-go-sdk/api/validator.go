@@ -17,10 +17,16 @@ import (
 
 const maxSchemaErrorBytes = 256
 
+// ValidateJSON checks a message read from a peer against schema. Keys the schema does not declare are ignored
+// (stripUnknown), so a peer on a newer version can add a field.
 func ValidateJSON(schema *openapi3.Schema, raw []byte) error {
 	var value any
 	if err := json.Unmarshal(raw, &value); err != nil {
 		return fmt.Errorf("decoding json: %w", err)
+	}
+
+	if _, err := stripUnknown(schema, value, nil); err != nil {
+		return errors.New(boundErrorText(err.Error()))
 	}
 
 	if err := schema.VisitJSON(value, openapi3.SetSchemaErrorMessageCustomizer(formatSchemaError)); err != nil {

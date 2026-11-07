@@ -41,8 +41,12 @@ func TestValidateJSON(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name:    "huge unknown key",
-			raw:     `{"` + strings.Repeat(`\u001b`, 100000) + `":1}`,
+			name: "huge unknown key is ignored",
+			raw:  `{"name":"abc","` + strings.Repeat(`\u001b`, 100000) + `":1}`,
+		},
+		{
+			name:    "case variant key",
+			raw:     `{"name":"abc","NAME":"` + strings.Repeat(`\u001b`, 100000) + `"}`,
 			wantErr: true,
 		},
 	}

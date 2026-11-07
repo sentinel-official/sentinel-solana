@@ -47,6 +47,21 @@ var spec = sync.OnceValue(func() *openapi3.T {
 	return s
 })
 
+// clientSpec is the spec a client checks responses against: it reads an error code it does not know
+// (api.OpenErrorCodes), which ParseError keeps with its status and message.
+//
+//nolint:gochecknoglobals
+var clientSpec = sync.OnceValue(func() *openapi3.T {
+	s, err := GetSpec()
+	if err != nil {
+		panic(fmt.Errorf("loading nodeapi client spec: %w", err))
+	}
+
+	api.OpenErrorCodes(s)
+
+	return s
+})
+
 type Unimplemented struct{}
 
 func (Unimplemented) CloseSession(context.Context, CloseSessionRequestObject) (CloseSessionResponseObject, error) {
@@ -166,7 +181,7 @@ func NewInsecureClient(
 	opts ...api.TransportOption,
 ) (*ClientWithResponses, error) {
 	insecure := api.NewInsecureHTTPClient(timeout, opts...)
-	validated := api.NewValidatedTransport(insecure.Transport, spec(), api.MaxResponseBodyBytes)
+	validated := api.NewValidatedTransport(insecure.Transport, clientSpec(), api.MaxResponseBodyBytes)
 	insecure.Transport = &api.RetryTransport{Base: validated}
 
 	return NewClientWithResponses(baseURL, WithHTTPClient(insecure))
@@ -180,7 +195,7 @@ func NewPinnedClient(
 	opts ...api.TransportOption,
 ) (*ClientWithResponses, error) {
 	pinned := api.NewPinnedHTTPClient(fingerprint, timeout, opts...)
-	validated := api.NewValidatedTransport(pinned.Transport, spec(), api.MaxResponseBodyBytes)
+	validated := api.NewValidatedTransport(pinned.Transport, clientSpec(), api.MaxResponseBodyBytes)
 	signed := &api.SignedTransport{
 		Base:   validated,
 		Signer: key,
