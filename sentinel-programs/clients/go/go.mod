@@ -16,7 +16,7 @@ require (
 	github.com/buger/jsonparser v1.6.1 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/fatih/color v1.19.0 // indirect
-	github.com/gagliardetto/treeout v0.1.4 // indirect
+	github.com/gagliardetto/treeout v0.1.5-0.20211231002423-c82a36ab197a // indirect
 	github.com/goccy/go-json v0.12.0 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/gorilla/rpc v1.2.1 // indirect

@@ -51,7 +51,7 @@ require (
 	github.com/fatih/color v1.19.0 // indirect
 	github.com/felixge/httpsnoop v1.1.0 // indirect
 	github.com/gabriel-vasile/mimetype v1.4.16 // indirect
-	github.com/gagliardetto/treeout v0.1.4 // indirect
+	github.com/gagliardetto/treeout v0.1.5-0.20211231002423-c82a36ab197a // indirect
 	github.com/gin-contrib/sse v1.2.0 // indirect
 	github.com/go-logr/logr v1.4.4 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect

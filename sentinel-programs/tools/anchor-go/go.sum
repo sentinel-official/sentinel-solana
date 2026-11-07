@@ -14,8 +14,8 @@ github.com/gagliardetto/binary v0.8.0 h1:U9ahc45v9HW0d15LoN++vIXSJyqR/pWw8DDlhd7
 github.com/gagliardetto/binary v0.8.0/go.mod h1:2tfj51g5o9dnvsc+fL3Jxr22MuWzYXwx9wEoN0XQ7/c=
 github.com/gagliardetto/solana-go v1.25.0 h1:oA82BtKW6PTDq0AzXh/ivj6UPFOvHAUAsXQd4KPW7rU=
 github.com/gagliardetto/solana-go v1.25.0/go.mod h1:SwTS3aUVSJIvmMjQdXBOea3X3roXZNHnbLy2JwHECxk=
-github.com/gagliardetto/treeout v0.1.4 h1:ozeYerrLCmCubo1TcIjFiOWTTGteOOHND1twdFpgwaw=
-github.com/gagliardetto/treeout v0.1.4/go.mod h1:loUefvXTrlRG5rYmJmExNryyBRh8f89VZhmMOyCyqok=
+github.com/gagliardetto/treeout v0.1.5-0.20211231002423-c82a36ab197a h1:ZuXXcDuq31lRpHXwGpzQ6ht+HYYuz4oYDkFjEtgkb60=
+github.com/gagliardetto/treeout v0.1.5-0.20211231002423-c82a36ab197a/go.mod h1:loUefvXTrlRG5rYmJmExNryyBRh8f89VZhmMOyCyqok=
 github.com/goccy/go-json v0.12.0 h1:pD+oWouAiz4yruwXIt/iT+lOMeyhr1aTtxzaMP/RgVI=
 github.com/goccy/go-json v0.12.0/go.mod h1:3NdmfEkZlB7YI5UFw/qdFKq8XN1aiWR0YyRPWZNQltY=
 github.com/google/go-cmp v0.7.0 h1:wk8382ETsv4JYUZwIsn6YpYiWiBsYLSJiTsyBybVuN8=

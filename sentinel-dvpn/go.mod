@@ -49,7 +49,7 @@ require (
 	github.com/fsnotify/fsnotify v1.10.1 // indirect
 	github.com/gabriel-vasile/mimetype v1.4.16 // indirect
 	github.com/gagliardetto/binary v0.8.0 // indirect
-	github.com/gagliardetto/treeout v0.1.4 // indirect
+	github.com/gagliardetto/treeout v0.1.5-0.20211231002423-c82a36ab197a // indirect
 	github.com/getkin/kin-openapi v0.152.0 // indirect
 	github.com/gin-contrib/logger v1.2.10 // indirect
 	github.com/gin-contrib/requestid v1.0.9 // indirect
