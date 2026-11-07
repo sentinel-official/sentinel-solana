@@ -165,6 +165,9 @@ type PeerStats struct {
 	RxBytes   uint64 `json:"rx_bytes"`
 	TxBytes   uint64 `json:"tx_bytes"`
 	UpdatedAt int64  `json:"updated_at"`
+	// Packet counts, where the source has them (LinkStats). Zero means unknown.
+	RxPackets uint64 `json:"rx_packets,omitempty"`
+	TxPackets uint64 `json:"tx_packets,omitempty"`
 }
 
 type Placement struct {

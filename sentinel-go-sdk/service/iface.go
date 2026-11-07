@@ -109,9 +109,22 @@ func parseNetstat(out []byte, iface string) (PeerStats, error) {
 			return PeerStats{}, fmt.Errorf("parsing %s tx bytes: %w", iface, err)
 		}
 
+		// Packet columns sit two before their byte columns (Ipkts Ierrs Ibytes).
+		rxPackets, err := strconv.ParseUint(fields[rxIndex-2], 10, 64)
+		if err != nil {
+			return PeerStats{}, fmt.Errorf("parsing %s rx packets: %w", iface, err)
+		}
+
+		txPackets, err := strconv.ParseUint(fields[txIndex-2], 10, 64)
+		if err != nil {
+			return PeerStats{}, fmt.Errorf("parsing %s tx packets: %w", iface, err)
+		}
+
 		return PeerStats{
-			RxBytes: rxBytes,
-			TxBytes: txBytes,
+			RxBytes:   rxBytes,
+			RxPackets: rxPackets,
+			TxBytes:   txBytes,
+			TxPackets: txPackets,
 		}, nil
 	}
 

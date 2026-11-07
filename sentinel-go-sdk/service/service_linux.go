@@ -27,8 +27,10 @@ func LinkStats(iface string) (PeerStats, error) {
 	}
 
 	return PeerStats{
-		RxBytes: stats.RxBytes,
-		TxBytes: stats.TxBytes,
+		RxBytes:   stats.RxBytes,
+		RxPackets: stats.RxPackets,
+		TxBytes:   stats.TxBytes,
+		TxPackets: stats.TxPackets,
 	}, nil
 }
 

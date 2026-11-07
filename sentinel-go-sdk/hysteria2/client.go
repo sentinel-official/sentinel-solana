@@ -7,6 +7,7 @@ import (
 	"net/netip"
 	"runtime"
 	"strconv"
+	"sync"
 
 	"github.com/google/uuid"
 	"github.com/rs/zerolog"
@@ -19,6 +20,8 @@ const clientTemplate = "templates/client.yaml.tmpl"
 var _ service.ClientCleaner = (*Client)(nil)
 
 type Client struct {
+	meter     tunMeter
+	statsMu   sync.Mutex
 	conf      string
 	iface     string
 	live      string
@@ -171,7 +174,51 @@ func (c *Client) Stats(_ context.Context) (service.PeerStats, error) {
 		return service.PeerStats{}, fmt.Errorf("querying stats: %w", err)
 	}
 
-	return stats, nil
+	c.statsMu.Lock()
+	defer c.statsMu.Unlock()
+
+	return c.meter.add(stats), nil
+}
+
+// tunMeter removes the double count of the Hysteria2 tun. Its "system" TCP
+// stack NATs every TCP flow through a listener on the tun's own address, so
+// each TCP byte crosses the tun once in each direction (rx and tx), while UDP
+// crosses once. Per sample, max(Δrx, Δtx) is exact for TCP, one-way UDP and
+// any mix of the two; only bulk UDP in both directions within one sample
+// undercounts (by the smaller direction). The total is reported as rx so both
+// fields stay monotonic.
+//
+// The tun counts whole IP packets while the node meters proxied payload, so
+// headers would make the client count about 5 % high. tunHeaderBytes is taken
+// off per packet in the counted direction: the smallest IPv4+UDP header, so
+// the client never drops below the payload it really moved.
+type tunMeter struct {
+	last  service.PeerStats
+	total uint64
+}
+
+const tunHeaderBytes = 28
+
+func (m *tunMeter) add(raw service.PeerStats) service.PeerStats {
+	delta := func(now, prev uint64) uint64 {
+		if now < prev { // interface recreated: counters restarted
+			return now
+		}
+
+		return now - prev
+	}
+
+	rx, tx := delta(raw.RxBytes, m.last.RxBytes), delta(raw.TxBytes, m.last.TxBytes)
+	bytes, packets := rx, delta(raw.RxPackets, m.last.RxPackets)
+
+	if tx > rx {
+		bytes, packets = tx, delta(raw.TxPackets, m.last.TxPackets)
+	}
+
+	m.last = raw
+	m.total += bytes - min(bytes, packets*tunHeaderBytes)
+
+	return service.PeerStats{RxBytes: m.total}
 }
 
 func (c *Client) Stop(ctx context.Context) error {
