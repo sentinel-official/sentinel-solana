@@ -213,29 +213,35 @@ func (s *Server) RemovePeer(ctx context.Context, id service.PeerID) error {
 	s.mgmt.removeUser(id)
 	s.mu.Unlock()
 
-	var errs []error
+	// A kill can fail only because the client already left (crash-killed: "ERROR: no such client").
+	// The status poll decides: gone means removed. Failing on the kill error kept the peer and the
+	// node retried the close forever under closeMu.
+	var killErrs []error
 
 	for _, cid := range cids {
 		if _, err := s.mgmt.exec("client-kill " + cid + " HALT"); err != nil {
-			errs = append(errs, err)
+			killErrs = append(killErrs, err)
 		}
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, s.removeTimeout)
 	defer cancel()
 
-	if err := s.waitPeerGone(ctx, string(id)); errors.Is(err, errPeerNotRemoved) {
+	goneErr := s.waitPeerGone(ctx, string(id))
+	if errors.Is(goneErr, errPeerNotRemoved) {
 		if _, killErr := s.mgmt.exec("kill " + string(id)); killErr != nil {
-			errs = append(errs, killErr)
+			killErrs = append(killErrs, killErr)
 		}
 
-		errs = append(errs, s.waitPeerGone(ctx, string(id)))
-	} else if err != nil {
-		errs = append(errs, err)
+		goneErr = s.waitPeerGone(ctx, string(id))
 	}
 
-	if err := errors.Join(errs...); err != nil {
-		return fmt.Errorf("removing peer %s: %w", id, err)
+	if goneErr != nil {
+		return fmt.Errorf("removing peer %s: %w", id, errors.Join(append(killErrs, goneErr)...))
+	}
+
+	if len(killErrs) > 0 {
+		s.log.Debug().Err(errors.Join(killErrs...)).Str("peer", string(id)).Msg("kill failed but the peer is gone")
 	}
 
 	s.mu.Lock()

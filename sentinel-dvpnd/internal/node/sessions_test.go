@@ -39,6 +39,19 @@ func (s failingRemoveServer) RemovePeer(context.Context, service.PeerID) error {
 	return errors.New("peer removal failed")
 }
 
+// goneRemoveServer: the peer is already gone (OpenVPN client left / node restarted).
+type goneRemoveServer struct {
+	service.Server
+
+	calls *int
+}
+
+func (s goneRemoveServer) RemovePeer(_ context.Context, id service.PeerID) error {
+	*s.calls++
+
+	return fmt.Errorf("%w: %s", service.ErrPeerNotFound, id)
+}
+
 type fakeCancelAfterAddPeer struct {
 	service.Server
 
@@ -213,6 +226,66 @@ func TestRuntime_CloseSession_PublishesBeforePeerRemoval(t *testing.T) {
 	node.SetService(r, sdktest.NewFakeServer(state))
 	require.NoError(t, node.SyncUsage(t.Context(), r))
 	require.Empty(t, frames)
+}
+
+// A peer that is already gone is removed: the close finishes at once instead of retrying
+// "peer not found": the close looped and never answered the client's DELETE.
+func TestRuntime_CloseSession_PeerAlreadyGone(t *testing.T) {
+	t.Parallel()
+
+	r, home, state := newRuntime(t)
+	sess := seedSession(t, home, "session-gone", "peer-gone")
+	calls := 0
+	node.SetService(r, goneRemoveServer{Server: sdktest.NewFakeServer(state), calls: &calls})
+
+	start := time.Now()
+	require.NoError(t, node.CloseSession(t.Context(), r, sess, "closed by client"))
+	require.Equal(t, 1, calls, "no retries for a peer that is gone")
+	require.Less(t, time.Since(start), time.Second)
+	require.Equal(t, node.SessionStatusClosed, sess.Status)
+}
+
+// countingFailRemoveServer: RemovePeer always fails (a transient node-side error), counting calls.
+type countingFailRemoveServer struct {
+	service.Server
+
+	mu    *sync.Mutex
+	calls *int
+}
+
+func (s countingFailRemoveServer) RemovePeer(context.Context, service.PeerID) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	*s.calls++
+
+	return errors.New("peer removal failed")
+}
+
+// The background retry ran 5 attempts with 2 s sleeps under the node-wide closeMu, so one
+// stuck close blocked every open and close for ~30 s each cycle. It now makes one attempt per cycle.
+func TestRuntime_RetryClosingSessions_OneAttemptPerCycle(t *testing.T) {
+	t.Parallel()
+
+	r, home, state := newRuntime(t)
+	sess := seedSession(t, home, "session-stuck", "peer-stuck")
+
+	ctx, cancel := context.WithCancel(t.Context())
+	node.SetService(r, failingRemoveServer{Server: sdktest.NewFakeServer(state), cancel: cancel})
+	require.Error(t, node.CloseSession(ctx, r, sess, "closed by client"), "first close fails: session stays closing")
+
+	var mu sync.Mutex
+
+	calls := 0
+	node.SetService(r, countingFailRemoveServer{Server: sdktest.NewFakeServer(state), mu: &mu, calls: &calls})
+
+	start := time.Now()
+	require.NoError(t, node.SyncUsage(t.Context(), r))
+	require.Less(t, time.Since(start), time.Second, "no retry sleeps while holding closeMu")
+
+	mu.Lock()
+	defer mu.Unlock()
+	require.Equal(t, 1, calls, "one attempt per sync cycle")
 }
 
 func TestRuntime_CloseSession_PublishesClosedEvent(t *testing.T) {

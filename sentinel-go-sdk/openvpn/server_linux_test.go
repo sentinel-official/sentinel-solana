@@ -263,10 +263,18 @@ func TestServer_RemovePeer_VerifiesDisconnect(t *testing.T) {
 			wantErr: "peer not removed",
 		},
 		{
+			// The client was crash-killed, so the kill is rejected, but status shows it gone.
 			killReply: "ERROR: no such client\n",
-			name:      "management rejects HALT",
+			name:      "HALT rejected but the client is gone",
 			status:    []bool{false},
 			want:      []string{"client-kill 7 HALT", "status 3"},
+		},
+		{
+			killReply: "ERROR: no such client\n",
+			name:      "HALT rejected and still connected",
+			status:    []bool{true, true},
+			timeout:   50 * time.Millisecond,
+			want:      []string{"client-kill 7 HALT", "status 3", "kill " + peerID, "status 3"},
 			wantErr:   "management command failed: ERROR: no such client",
 		},
 	}
@@ -347,6 +355,11 @@ func TestServer_RemovePeer_VerifiesDisconnect(t *testing.T) {
 				require.NoError(t, err)
 			} else {
 				require.ErrorContains(t, err, tc.wantErr)
+			}
+
+			if tc.wantErr == "" {
+				// Removed means forgotten: the next close is "not found", which the node treats as done.
+				require.ErrorIs(t, s.RemovePeer(t.Context(), service.PeerID(peer.Username)), service.ErrPeerNotFound)
 			}
 
 			_ = server.Close()

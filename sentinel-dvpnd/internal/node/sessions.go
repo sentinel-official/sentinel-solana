@@ -50,7 +50,14 @@ func (r *Runtime) closeSession(ctx context.Context, sess *Session, reason string
 		return nil
 	}
 
-	if err := r.removePeer(ctx, service.PeerID(sess.PeerID), sess.ID); err != nil {
+	// The background retry runs every sync cycle, so it makes one attempt: retrying with sleeps here
+	// held the node-wide closeMu for ~30 s per stuck session and every open and close queued.
+	attempts := uint(removePeerAttempts)
+	if reason == nodeapi.ReasonRetry {
+		attempts = 1
+	}
+
+	if err := r.removePeer(ctx, service.PeerID(sess.PeerID), sess.ID, attempts); err != nil {
 		return err
 	}
 
@@ -134,7 +141,7 @@ func (r *Runtime) openSession(
 		rollbackCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), rollbackTimeout)
 		defer cancel()
 
-		return r.removePeer(rollbackCtx, response.ID, id)
+		return r.removePeer(rollbackCtx, response.ID, id, removePeerAttempts)
 	}
 
 	if admitted.voucher != nil && admitted.voucher.Cumulative > admitted.position.Cumulative {
@@ -323,15 +330,24 @@ func (r *Runtime) reloadSessions(ctx context.Context) error {
 	return nil
 }
 
-func (r *Runtime) removePeer(ctx context.Context, id service.PeerID, sessionID string) error {
-	attempt := func() error { return r.service.RemovePeer(ctx, id) }
+func (r *Runtime) removePeer(ctx context.Context, id service.PeerID, sessionID string, attempts uint) error {
+	// "Not found" means the peer is already gone (the OpenVPN client left, an earlier attempt
+	// removed it, or the node restarted): the goal is reached. Retrying it looped the close and the
+	// client's DELETE never got an answer.
+	attempt := func() error {
+		if err := r.service.RemovePeer(ctx, id); err != nil && !errors.Is(err, service.ErrPeerNotFound) {
+			return err
+		}
+
+		return nil
+	}
 
 	warn := func(_ uint, err error) {
 		r.log.Warn().Err(err).Str("session", sessionID).Msg("removing peer; will retry")
 	}
 	if err := retry.Do(
 		attempt,
-		retry.Attempts(removePeerAttempts),
+		retry.Attempts(attempts),
 		retry.Context(ctx),
 		retry.Delay(removePeerBackoff),
 		retry.DelayType(retry.FixedDelay),
