@@ -30,8 +30,8 @@ func TestRuntime_BlockFor(t *testing.T) {
 	}{
 		{basis: session.BasisPerGB, minimum: 100_000_000, name: "defaults use node minimum", want: 100_000_000},
 		{
-			basis: session.BasisPerGB, configured: 300_000_000, minimum: 100_000_000,
-			name: "configured above minimum", want: 300_000_000,
+			basis: session.BasisPerGB, configured: 200_000_000, minimum: 100_000_000,
+			name: "configured above minimum", want: 200_000_000,
 		},
 		{
 			basis: session.BasisPerGB, configured: 1, minimum: 100_000_000,
@@ -39,7 +39,7 @@ func TestRuntime_BlockFor(t *testing.T) {
 		},
 		{
 			basis: session.BasisPerGB, configured: 5_000_000_000, minimum: 100_000_000,
-			name: "configured limited", want: 2_000_000_000,
+			name: "configured limited", want: config.DefaultClient().MaxPrepayBytes,
 		},
 		{basis: session.BasisPerGB, minimum: 1, name: "one-byte node minimum", want: 200_001},
 		{
@@ -50,11 +50,18 @@ func TestRuntime_BlockFor(t *testing.T) {
 			basis: session.BasisPerGB, err: session.ErrPrepayExceedsMaximum, minimum: 3_000_000_000,
 			name: "node minimum above maximum",
 		},
-		{basis: session.BasisPerHour, minimum: 60, name: "hourly minimum", want: 60},
-		{basis: session.BasisPerHour, configured: 20_000, minimum: 60, name: "hourly maximum", want: 14_400},
 		{
-			basis: session.BasisPerHour, err: session.ErrPrepayExceedsMaximum, minimum: 14_401,
-			name: "hourly minimum above maximum",
+			basis: session.BasisPerGB, err: session.ErrPrepayExceedsMaximum, minimum: 2_000_000_000,
+			name: "2 GB node minimum is over the default cap",
+		},
+		{basis: session.BasisPerHour, minimum: 60, name: "hourly minimum", want: 60},
+		{
+			basis: session.BasisPerHour, configured: 20_000, minimum: 60,
+			name: "hourly maximum", want: config.DefaultClient().MaxPrepaySeconds,
+		},
+		{
+			basis: session.BasisPerHour, err: session.ErrPrepayExceedsMaximum, minimum: 14_400,
+			name: "4 h node minimum is over the default cap",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -72,6 +79,20 @@ func TestRuntime_BlockFor(t *testing.T) {
 			require.Equal(t, tc.want, block)
 		})
 	}
+}
+
+func TestRuntime_BlockFor_NamesTheCap(t *testing.T) {
+	t.Parallel()
+
+	home := testutil.NewClientHome(t, sdktest.NewFakeRPC(t))
+	r := newRuntime(t, home, home.ProgramClient)
+	settlement := nodeapi.Settlement{MinChannelPrepayBytes: 2_000_000_000, MinChannelPrepaySeconds: 14_400}
+
+	_, err := client.BlockFor(r, session.Terms{Basis: session.BasisPerGB, Price: 5_000}, settlement)
+	require.ErrorContains(t, err, "node minimum 2000000000 is over client max_prepay_bytes 268435456")
+
+	_, err = client.BlockFor(r, session.Terms{Basis: session.BasisPerHour, Price: 5_000}, settlement)
+	require.ErrorContains(t, err, "node minimum 14400 is over client max_prepay_seconds 1800")
 }
 
 func TestRuntime_BlockFor_RejectsZeroBlock(t *testing.T) {

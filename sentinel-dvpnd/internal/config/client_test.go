@@ -94,8 +94,8 @@ func TestDefaultClient_Prepay(t *testing.T) {
 
 	require.Equal(t, uint64(100_000_000), cfg.PrepayBytes)
 	require.Equal(t, uint64(60), cfg.PrepaySeconds)
-	require.Equal(t, uint64(2_000_000_000), cfg.MaxPrepayBytes)
-	require.Equal(t, uint64(14_400), cfg.MaxPrepaySeconds)
+	require.Equal(t, uint64(268_435_456), cfg.MaxPrepayBytes)
+	require.Equal(t, uint64(1_800), cfg.MaxPrepaySeconds)
 	require.Equal(t, uint64(30), cfg.NodeTimeoutSeconds)
 	require.Equal(t, uint8(5), cfg.TolerancePercent)
 }

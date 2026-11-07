@@ -2,6 +2,7 @@ package client
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 
@@ -17,14 +18,21 @@ func (r *Runtime) blockFor(terms session.Terms, settlement nodeapi.Settlement) (
 	minimum := settlement.MinChannelPrepayBytes
 	maximum := r.cfg.MaxPrepayBytes
 	configured := r.cfg.PrepayBytes
+	key := "max_prepay_bytes"
 
 	if terms.Basis == session.BasisPerHour {
 		minimum = settlement.MinChannelPrepaySeconds
 		maximum = r.cfg.MaxPrepaySeconds
 		configured = r.cfg.PrepaySeconds
+		key = "max_prepay_seconds"
 	}
 
-	return session.PrepayBlock(terms, configured, minimum, maximum)
+	block, err := session.PrepayBlock(terms, configured, minimum, maximum)
+	if errors.Is(err, session.ErrPrepayExceedsMaximum) {
+		return 0, fmt.Errorf("node minimum %d is over client %s %d: %w", minimum, key, maximum, err)
+	}
+
+	return block, err //nolint:wrapcheck // the session errors name the cause
 }
 
 func (r *Runtime) settledBound(

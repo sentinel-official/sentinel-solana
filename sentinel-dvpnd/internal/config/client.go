@@ -17,8 +17,8 @@ type Client struct {
 	Basis              string   `default:"per_gb"     toml:"basis"                      validate:"oneof=per_gb per_hour"`
 	EscrowBaseUnits    uint64   `default:"1000000000" toml:"escrow_base_units"          validate:"gt=0"`
 	Key                Key      `toml:"key"`
-	MaxPrepayBytes     uint64   `default:"2000000000" toml:"max_prepay_bytes"           validate:"gt=0"`
-	MaxPrepaySeconds   uint64   `default:"14400"      toml:"max_prepay_seconds"         validate:"gt=0"`
+	MaxPrepayBytes     uint64   `default:"268435456"  toml:"max_prepay_bytes"           validate:"gt=0"`
+	MaxPrepaySeconds   uint64   `default:"1800"       toml:"max_prepay_seconds"         validate:"gt=0"`
 	Network            Network  `toml:"network"`
 	NodeTimeoutSeconds uint64   `default:"30"         toml:"node_timeout_seconds"       validate:"gt=0"`
 	Owner              string   `toml:"owner"         validate:"required"`
@@ -50,8 +50,8 @@ func DefaultClient() Client {
 		Basis:            BasisPerGB,
 		EscrowBaseUnits:  1_000_000_000,
 		Key:              Key{Name: operatorKeyName},
-		MaxPrepayBytes:   2_000_000_000,
-		MaxPrepaySeconds: 14_400,
+		MaxPrepayBytes:   268_435_456,
+		MaxPrepaySeconds: 1_800,
 		Network: Network{
 			DNSBackend: DefaultDNSBackend(),
 			DNSServers: []string{"1.1.1.1", "1.0.0.1"},
