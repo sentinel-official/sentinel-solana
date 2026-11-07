@@ -82,10 +82,15 @@ func (r *Runtime) issueLoop(ctx context.Context, conn *connection) (string, bool
 	pollTicker := time.NewTicker(r.pollInterval)
 	defer pollTicker.Stop()
 
+	// The session GET runs outside issueMu, in its own goroutine, one at a time: a node that is slow to answer
+	// must not hold up the sample ticks and voucher replies. Its result is applied under issueMu like any event.
+	polled := make(chan pollResult, 1)
+	polling := false
+
 	for {
 		var (
 			event nodeEvent
-			poll  bool
+			poll  *pollResult
 		)
 
 		select {
@@ -94,7 +99,21 @@ func (r *Runtime) issueLoop(ctx context.Context, conn *connection) (string, bool
 		case event = <-events:
 		case <-sampleTicker.C:
 		case <-pollTicker.C:
-			poll = true
+			if !polling {
+				polling = true
+
+				// Read the client under issueMu, where it is written; the goroutine then works on its own copy.
+				conn.issueMu.Lock()
+				nodeClient, sessionID := conn.nodeClient, conn.session.ID
+				conn.issueMu.Unlock()
+
+				go r.fetchSession(streamCtx, nodeClient, sessionID, polled)
+			}
+
+			continue
+		case result := <-polled:
+			polling = false
+			poll = &result
 		}
 
 		if errors.Is(event.err, api.ErrUnauthorized) {
@@ -138,8 +157,8 @@ func (r *Runtime) issueLoop(ctx context.Context, conn *connection) (string, bool
 		switch {
 		case event.request != nil:
 			err = r.handleVoucherRequest(ctx, conn, event.request)
-		case poll:
-			err = r.poll(ctx, conn)
+		case poll != nil:
+			err = r.applyPoll(ctx, conn, *poll)
 		case !event.heartbeat:
 			err = r.sampleAndIssue(ctx, conn, now)
 		}
@@ -168,12 +187,33 @@ func (r *Runtime) issueWhenDue(ctx context.Context, conn *connection, local sess
 	return r.sendVoucher(ctx, conn, cumulative, now)
 }
 
-func (r *Runtime) poll(ctx context.Context, conn *connection) error {
+type pollResult struct {
+	at       time.Time
+	err      error
+	response *nodeapi.GetSessionResponse
+}
+
+// fetchSession is the network half of a poll. It touches no connection state.
+func (r *Runtime) fetchSession(
+	ctx context.Context, client *nodeapi.ClientWithResponses, id string, out chan<- pollResult,
+) {
 	pctx, cancel := r.withTimeout(ctx)
 	defer cancel()
 
-	response, err := conn.nodeClient.GetSessionWithResponse(pctx, conn.session.ID)
-	now := time.Now()
+	response, err := client.GetSessionWithResponse(pctx, id)
+	out <- pollResult{at: time.Now(), err: err, response: response}
+}
+
+func (r *Runtime) poll(ctx context.Context, conn *connection) error {
+	out := make(chan pollResult, 1)
+	r.fetchSession(ctx, conn.nodeClient, conn.session.ID, out)
+
+	return r.applyPoll(ctx, conn, <-out)
+}
+
+// applyPoll is the state half of a poll; the caller holds issueMu.
+func (r *Runtime) applyPoll(ctx context.Context, conn *connection, result pollResult) error {
+	response, err, now := result.response, result.err, result.at
 
 	if err != nil {
 		if conn.pollFailingSinceUnix == 0 {
