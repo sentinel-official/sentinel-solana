@@ -25,9 +25,15 @@ import (
 const (
 	servicePollInterval = 250 * time.Millisecond
 	serviceResetPeriod  = 24 * time.Hour
-	serviceRestartCount = 3
-	serviceRestartDelay = 5 * time.Second
 )
+
+// serviceRestartDelays: after a crash the service restarts quickly, then backs off. Windows
+// repeats the last action for every later failure, so a daemon that keeps failing (preflight
+// cannot reach the RPC) retries every 5 min. A flat 5 s restarted it ~6 times a minute for days
+// and kept the RPC provider answering 429, which kept preflight failing.
+//
+//nolint:gochecknoglobals // fixed policy
+var serviceRestartDelays = []time.Duration{5 * time.Second, 30 * time.Second, 5 * time.Minute}
 
 const (
 	startWaitHint = 120 * time.Second
@@ -192,10 +198,10 @@ func configureService(s installedService, cfg mgr.Config) error {
 		return fmt.Errorf("configuring service: %w", err)
 	}
 
-	actions := make([]mgr.RecoveryAction, serviceRestartCount)
+	actions := make([]mgr.RecoveryAction, len(serviceRestartDelays))
 	for i := range actions {
 		actions[i] = mgr.RecoveryAction{
-			Delay: serviceRestartDelay,
+			Delay: serviceRestartDelays[i],
 			Type:  mgr.ServiceRestart,
 		}
 	}

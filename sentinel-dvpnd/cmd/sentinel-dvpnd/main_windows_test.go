@@ -77,9 +77,10 @@ func TestConfigureService(t *testing.T) {
 	require.Len(t, fake.actions, 3)
 	require.EqualValues(t, 86400, fake.reset)
 
-	for _, action := range fake.actions {
-		require.Equal(t, mgr.ServiceRestart, action.Type)
-		require.Equal(t, 5*time.Second, action.Delay)
+	// Backs off; Windows repeats the last (5 min) action for every later failure.
+	for i, want := range []time.Duration{5 * time.Second, 30 * time.Second, 5 * time.Minute} {
+		require.Equal(t, mgr.ServiceRestart, fake.actions[i].Type)
+		require.Equal(t, want, fake.actions[i].Delay)
 	}
 }
 
