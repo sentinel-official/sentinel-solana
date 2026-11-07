@@ -200,3 +200,11 @@ func StopSession(ctx context.Context, r *Runtime) error {
 func VerifyLedger(r *Runtime, ch *Channel, view nodeapi.Position, terms session.Terms, settledBound uint64) error {
 	return r.verifyLedger(ch, view, terms, settledBound)
 }
+
+// SetWallClockOffset shifts the issue loop's wall clock by d (a system time change), leaving the
+// monotonic clock alone.
+func SetWallClockOffset(t interface{ Cleanup(func()) }, d time.Duration) {
+	wallOffset.Store(int64(d))
+
+	t.Cleanup(func() { wallOffset.Store(0) })
+}

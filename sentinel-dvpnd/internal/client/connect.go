@@ -61,7 +61,7 @@ func (r *Runtime) activateSession(
 	cleanup *cleanupStack,
 ) error {
 	now := time.Now()
-	conn.lastContactUnix = now.Unix()
+	conn.lastContact = monoNow()
 	conn.session.ID = opened.SessionID
 	conn.session.NodeAddress = req.GetNode()
 	conn.session.ProxyEndpoint = conn.service.ProxyEndpoint()

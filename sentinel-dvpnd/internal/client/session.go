@@ -37,27 +37,27 @@ var (
 )
 
 type connection struct {
-	block                   uint64
-	cancel                  context.CancelFunc
-	channel                 *Channel
-	heartbeat               time.Duration
-	iface                   string
-	issueMu                 sync.Mutex
-	lastContactUnix         int64
-	minBlock                uint64
-	nodeClient              *nodeapi.ClientWithResponses
-	nodeOwed                uint64
-	nodeSettled             uint64
-	nodeUsage               session.Usage
-	payer                   *session.Payer
-	pollFailingSinceUnix    int64
-	remoteClosed            bool
-	service                 service.Client
-	session                 Session
-	statsFailures           uint
-	streamClient            *nodeapi.ClientWithResponses
-	terms                   session.Terms
-	voucherFailingSinceUnix int64
+	block               uint64
+	cancel              context.CancelFunc
+	channel             *Channel
+	heartbeat           time.Duration
+	iface               string
+	issueMu             sync.Mutex
+	lastContact         time.Duration // monoNow() of the last node answer
+	minBlock            uint64
+	nodeClient          *nodeapi.ClientWithResponses
+	nodeOwed            uint64
+	nodeSettled         uint64
+	nodeUsage           session.Usage
+	payer               *session.Payer
+	pollFailingSince    time.Duration // monoNow() of the first failed poll; 0 = not failing
+	remoteClosed        bool
+	service             service.Client
+	session             Session
+	statsFailures       uint
+	streamClient        *nodeapi.ClientWithResponses
+	terms               session.Terms
+	voucherFailingSince time.Duration // monoNow() of the first failed voucher; 0 = not failing
 }
 
 type startResult struct {

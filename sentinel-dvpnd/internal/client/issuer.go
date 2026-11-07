@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync/atomic"
 	"time"
 
 	"github.com/solana-foundation/solana-go/v2"
@@ -107,17 +108,14 @@ func (r *Runtime) issueLoop(ctx context.Context, conn *connection) (string, bool
 
 		conn.issueMu.Lock()
 
-		now := time.Now()
+		now := wallNow()
 
 		r.mu.Lock()
 		if event.heartbeat || event.request != nil || event.closed {
-			conn.lastContactUnix = now.Unix()
+			conn.lastContact = monoNow()
 		}
 
-		timeout := int64(r.cfg.NodeTimeoutSeconds)
-		timedOut := now.Unix()-conn.lastContactUnix > timeout ||
-			(conn.pollFailingSinceUnix != 0 && now.Unix()-conn.pollFailingSinceUnix > timeout) ||
-			(conn.voucherFailingSinceUnix != 0 && now.Unix()-conn.voucherFailingSinceUnix > timeout)
+		timedOut := conn.nodeTimedOut(monoNow(), time.Duration(r.cfg.NodeTimeoutSeconds)*time.Second)
 		r.mu.Unlock()
 
 		if timedOut {
@@ -176,22 +174,22 @@ func (r *Runtime) poll(ctx context.Context, conn *connection) error {
 	now := time.Now()
 
 	if err != nil {
-		if conn.pollFailingSinceUnix == 0 {
-			conn.pollFailingSinceUnix = now.Unix()
+		if conn.pollFailingSince == 0 {
+			conn.pollFailingSince = monoNow()
 		}
 
 		return fmt.Errorf("getting session: %w", err)
 	}
 
 	if response.JSON200 == nil {
-		if response.StatusCode() >= 500 && conn.pollFailingSinceUnix == 0 {
-			conn.pollFailingSinceUnix = now.Unix()
+		if response.StatusCode() >= 500 && conn.pollFailingSince == 0 {
+			conn.pollFailingSince = monoNow()
 		}
 
 		return api.ParseError(response.StatusCode(), response.Body)
 	}
 
-	conn.pollFailingSinceUnix = 0
+	conn.pollFailingSince = 0
 
 	if response.JSON200.Status != nodeapi.SessionStatusActive {
 		if response.JSON200.CloseReason == "" {
@@ -204,7 +202,7 @@ func (r *Runtime) poll(ctx context.Context, conn *connection) error {
 	}
 
 	r.mu.Lock()
-	conn.lastContactUnix = now.Unix()
+	conn.lastContact = monoNow()
 	r.mu.Unlock()
 
 	local, err := r.sample(ctx, conn, now)
@@ -301,7 +299,7 @@ func (r *Runtime) recordConsumption(
 	conn.nodeOwed = consumption.OwedBaseUnits
 	conn.nodeSettled = consumption.SettledBaseUnits
 
-	conn.lastContactUnix = now.Unix()
+	conn.lastContact = monoNow()
 	if r.connection == conn {
 		conn.session.SpentBaseUnits = max(
 			conn.session.SpentBaseUnits,
@@ -462,16 +460,16 @@ func (r *Runtime) sendVoucher(
 	accepted := time.Now()
 
 	if err != nil {
-		if conn.voucherFailingSinceUnix == 0 {
-			conn.voucherFailingSinceUnix = accepted.Unix()
+		if conn.voucherFailingSince == 0 {
+			conn.voucherFailingSince = monoNow()
 		}
 
 		return fmt.Errorf("sending voucher: %w", err)
 	}
 
 	if response.JSON200 == nil {
-		if response.StatusCode() >= 500 && conn.voucherFailingSinceUnix == 0 {
-			conn.voucherFailingSinceUnix = accepted.Unix()
+		if response.StatusCode() >= 500 && conn.voucherFailingSince == 0 {
+			conn.voucherFailingSince = monoNow()
 		}
 
 		r.metrics.vouchers.WithLabelValues(kindChannel, resultRejected).Inc()
@@ -479,11 +477,11 @@ func (r *Runtime) sendVoucher(
 		return api.ParseError(response.StatusCode(), response.Body)
 	}
 
-	conn.voucherFailingSinceUnix = 0
+	conn.voucherFailingSince = 0
 	conn.payer.RecordIssued(cumulative)
 
 	r.mu.Lock()
-	conn.lastContactUnix = accepted.Unix()
+	conn.lastContact = monoNow()
 	r.mu.Unlock()
 
 	r.metrics.vouchers.WithLabelValues(kindChannel, resultAccepted).Inc()
@@ -553,4 +551,26 @@ func remoteCloseReason(conn *connection, reason string) string {
 	}
 
 	return reason
+}
+
+// The node timeout measures elapsed time on the monotonic clock. Wall-clock seconds jump when the
+// system time is set (NTP step, manual change, resume from sleep): a jump forward by more than the
+// timeout ended every live session at once as "node timed out" and started a redial.
+var (
+	monoBase   = time.Now()
+	wallOffset atomic.Int64 // tests: a system time change, in ns
+)
+
+// monoNow is the monotonic time since start; never 0 (0 = not failing).
+func monoNow() time.Duration { return time.Since(monoBase) + 1 }
+
+// wallNow is the issue loop's wall time.
+func wallNow() time.Time { return time.Now().Add(time.Duration(wallOffset.Load())) }
+
+// nodeTimedOut reports whether the node has been silent, or polls or vouchers have kept failing, for
+// longer than timeout. now is a monoNow() reading.
+func (c *connection) nodeTimedOut(now, timeout time.Duration) bool {
+	return now-c.lastContact > timeout ||
+		(c.pollFailingSince != 0 && now-c.pollFailingSince > timeout) ||
+		(c.voucherFailingSince != 0 && now-c.voucherFailingSince > timeout)
 }
