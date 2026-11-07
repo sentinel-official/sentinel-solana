@@ -710,6 +710,7 @@ func newChannelRequest(node string) *daemonv1.StartSessionRequest {
 
 func newRuntime(t *testing.T, home testutil.Home, programClient *program.Client) *client.Runtime {
 	t.Helper()
+	registerFakeClientOnce()
 
 	r, err := client.New(
 		home.Loaded, home.DB, home.DaemonKey, programClient, home.Sender, zerolog.Nop(), prometheus.NewRegistry(), home.Pin,
