@@ -54,6 +54,11 @@ func (e Extensions) Validate() error {
 	return validateJunk(o.I1, o.I2, o.I3, o.I4, o.I5)
 }
 
+// TransportOverhead is the padding S4 adds to every transport packet (wgcore fits the MTU to it).
+func (e Extensions) TransportOverhead() int {
+	return int(e.Obfuscation.S4)
+}
+
 type Obfuscation struct {
 	H1   uint32 `json:"h1"           toml:"h1"   validate:"gt=4"`
 	H2   uint32 `json:"h2"           toml:"h2"   validate:"gt=4"`

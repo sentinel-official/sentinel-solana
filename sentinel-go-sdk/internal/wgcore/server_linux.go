@@ -122,7 +122,7 @@ func (s *Server[E]) AddPeer(ctx context.Context, req service.PeerRequest) (servi
 	resp := PeerResponse[E]{
 		Addresses:  prefixStrings(prefixes),
 		Extensions: s.cfg.Extensions,
-		MTU:        s.cfg.MTU,
+		MTU:        serverMTU(s.cfg.MTU, s.cfg.Extensions),
 		Port:       s.cfg.ListenPort,
 		PublicKey:  s.publicKey,
 	}
@@ -278,7 +278,7 @@ func (s *Server[E]) Start(ctx context.Context) error {
 		Addresses:  prefixStrings(s.cfg.Addresses),
 		Extensions: s.cfg.Extensions,
 		ListenPort: s.cfg.ListenPort,
-		MTU:        s.cfg.MTU,
+		MTU:        serverMTU(s.cfg.MTU, s.cfg.Extensions),
 		PrivateKey: s.cfg.PrivateKey,
 	}
 

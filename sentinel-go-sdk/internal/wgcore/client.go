@@ -125,7 +125,7 @@ func (c *Client[E]) Start(ctx context.Context, host string, resp service.PeerRes
 		Endpoint:         net.JoinHostPort(host, strconv.Itoa(int(p.Port))),
 		Extensions:       p.Extensions,
 		KeepaliveSeconds: persistentKeepaliveSeconds,
-		MTU:              p.MTU,
+		MTU:              fitMTU(p.MTU, p.Extensions, host),
 		PrivateKey:       c.privateKey,
 		PublicKey:        p.PublicKey,
 	}
