@@ -395,6 +395,7 @@ func (r *Runtime) teardown(ctx context.Context, conn *connection, reason string)
 		}
 
 		r.stopService(ctx, conn.service)
+		r.dropPinnedConns("tunnel down")
 	}
 
 	var result stopResult
@@ -466,4 +467,19 @@ func (r *Runtime) watch(sessionID string) (*watcher, *Session) {
 	copied := *s
 
 	return w, &copied
+}
+
+// dropPinnedConns closes every connection dialled through the pin (chain RPC and node API) when the
+// tunnel comes up or goes down. Their sockets keep the source address and route they were opened on:
+// one opened before the tunnel keeps the physical address and, once the tunnel carries the route, its
+// packets go into the tunnel with a source the peer does not accept, so the request hangs until its
+// timeout. The HTTP clients redial on their next request, over the current route.
+func (r *Runtime) dropPinnedConns(why string) {
+	if r.pin == nil {
+		return
+	}
+
+	if n := r.pin.CloseConns(); n > 0 {
+		r.log.Debug().Int("closed", n).Str("why", why).Msg("dropped pooled connections")
+	}
 }

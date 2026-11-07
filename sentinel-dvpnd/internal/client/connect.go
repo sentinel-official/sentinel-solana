@@ -653,6 +653,7 @@ func (r *Runtime) startTunnel(
 	})
 
 	conn.iface = conn.service.Interface()
+	r.dropPinnedConns("tunnel up")
 
 	return ticket, allowed, nil
 }
