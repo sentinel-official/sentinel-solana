@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -133,6 +134,12 @@ func TestNetworksetupBackend_Cleanup_AcrossModeSwitch(t *testing.T) {
 
 func TestNetworksetupBackend_Cleanup_StatError(t *testing.T) {
 	t.Parallel()
+
+	// A file used as a directory gives ENOTDIR on macOS/Linux, but "path not found" (= not exist)
+	// on Windows, so the stat error this test needs cannot happen there. The backend is macOS-only.
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows reports a file-as-directory path as not existing; networksetup runs on macOS only")
+	}
 
 	parent := filepath.Join(t.TempDir(), "parent")
 	require.NoError(t, os.WriteFile(parent, []byte("file"), 0o600))

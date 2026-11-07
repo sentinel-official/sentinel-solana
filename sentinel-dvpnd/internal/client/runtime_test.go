@@ -1,7 +1,7 @@
 package client_test
 
 import (
-	"runtime"
+	"os"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -10,13 +10,14 @@ import (
 )
 
 func TestRunCommand_FeedsStdin(t *testing.T) {
-	t.Parallel()
+	// Re-exec the test binary as a helper that echoes stdin (TestMain, SENTINEL_STDIN_ECHO), so stdin
+	// feeding is tested on every OS rather than relying on the unix-only `cat`.
+	binary, err := os.Executable()
+	require.NoError(t, err)
 
-	if runtime.GOOS == "windows" {
-		t.Skip("uses a unix command")
-	}
+	t.Setenv("SENTINEL_STDIN_ECHO", "1")
 
-	out, err := client.RunCommand(t.Context(), "hello\n", "cat")
+	out, err := client.RunCommand(t.Context(), "hello\n", binary)
 	require.NoError(t, err)
 	require.Equal(t, "hello\n", string(out))
 }
