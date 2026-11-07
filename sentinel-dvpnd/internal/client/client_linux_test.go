@@ -50,4 +50,15 @@ func TestRenderNftRuleset_BlocksLANByDefault(t *testing.T) {
 	require.Contains(t, rules, "ip daddr 203.0.113.1 accept")
 	require.Contains(t, rules, "policy drop")
 	require.NotContains(t, rules, "10.0.0.0/8")
+	require.NotContains(t, rules, "fc00::/7")
+}
+
+func TestRenderNftRuleset_AllowLANIncludesIPv6UniqueLocal(t *testing.T) {
+	t.Parallel()
+
+	nodeAddrs := []netip.Addr{netip.MustParseAddr("203.0.113.1")}
+	rules := client.RenderNftRuleset("sentinel-dvpn-c0", "dvpn-c0", nodeAddrs, nil, true)
+
+	require.Contains(t, rules, "ip daddr { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16 } accept")
+	require.Contains(t, rules, "ip6 daddr fc00::/7 accept")
 }

@@ -23,6 +23,7 @@ table inet {{ .Table }} {
     ip daddr 169.254.0.0/16 accept
     ip6 daddr fe80::/10 accept
     {{ if .AllowLAN }}ip daddr { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16 } accept
+    ip6 daddr fc00::/7 accept
     {{ end }}}
 }
 `
