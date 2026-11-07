@@ -360,8 +360,20 @@ func Loaded(name string) (loaded bool, err error) {
 
 func call(proc *windows.LazyProc, args ...uintptr) error {
 	r, _, _ := proc.Call(args...)
-	if r != 0 {
-		return fmt.Errorf("calling %s: %w", proc.Name, syscall.Errno(r))
+	if err := dwordResult(r); err != nil {
+		return fmt.Errorf("calling %s: %w", proc.Name, err)
+	}
+
+	return nil
+}
+
+// dwordResult: the Fwpm* functions return a 32-bit DWORD. On arm64 the upper half of the return
+// register is undefined, so the raw uintptr did not match ErrSublayerNotFound and a harmless
+// "sublayer does not exist" was logged at error on every start; it could also turn a
+// success into an error. Only the low 32 bits count.
+func dwordResult(r uintptr) error {
+	if code := uint32(r); code != 0 {
+		return syscall.Errno(code)
 	}
 
 	return nil
