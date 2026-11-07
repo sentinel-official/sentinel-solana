@@ -88,6 +88,7 @@ func TestLookPath_RegisteredDirs(t *testing.T) {
 	driver := fakeClientDriver(1 << 25)
 	driver.LookupDirs = func() []string { return []string{dir} }
 	service.RegisterClient(service.Name("fake-dirs"), driver)
+	t.Cleanup(func() { service.DeregisterForTest(service.Name("fake-dirs")) })
 
 	path := writeExecutable(t, dir, binaryName("fakebin"))
 	t.Setenv("PATH", t.TempDir())

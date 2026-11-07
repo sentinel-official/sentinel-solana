@@ -46,6 +46,10 @@ func TestCleanupServer(t *testing.T) {
 	}
 	service.RegisterServer(service.Name("fake-cleanup"), hooked)
 	service.RegisterServer(service.Name("fake-cleanup-nil"), service.ServerDriver[fakeConfig]{Bit: 1 << 14})
+	t.Cleanup(func() {
+		service.DeregisterForTest(service.Name("fake-cleanup"))
+		service.DeregisterForTest(service.Name("fake-cleanup-nil"))
+	})
 
 	p := serverPlacementFixture(t)
 	require.NoError(t, service.CleanupServer(t.Context(), service.Name("fake-cleanup"), p))
@@ -77,6 +81,10 @@ func TestName(t *testing.T) {
 
 				service.RegisterClient(service.Name("fake-zed"), fakeClientDriver(1<<23))
 				service.RegisterClient(service.Name("fake-alpha"), fakeClientDriver(1<<22))
+				t.Cleanup(func() {
+					service.DeregisterForTest(service.Name("fake-zed"))
+					service.DeregisterForTest(service.Name("fake-alpha"))
+				})
 
 				names := service.Names()
 				require.Less(t, slices.Index(names, service.Name("fake-alpha")), slices.Index(names, service.Name("fake-zed")))
@@ -131,6 +139,7 @@ func TestPeerRequest_Unpack(t *testing.T) {
 
 	name := service.Name("fake-peer")
 	service.RegisterClient(name, fakeClientDriver(1<<19))
+	t.Cleanup(func() { service.DeregisterForTest(name) })
 
 	type payload struct {
 		PublicKey string `json:"public_key"`
@@ -181,6 +190,10 @@ func TestPreflightClient(t *testing.T) {
 	}
 	service.RegisterClient(service.Name("fake-preflight"), hooked)
 	service.RegisterClient(service.Name("fake-preflight-nil"), fakeClientDriver(1<<18))
+	t.Cleanup(func() {
+		service.DeregisterForTest(service.Name("fake-preflight"))
+		service.DeregisterForTest(service.Name("fake-preflight-nil"))
+	})
 
 	cases := []struct {
 		cfg     any
@@ -297,6 +310,13 @@ func TestRegisterClient_Panics(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
+			// A case may register one name before its expected panic; undo it so -count>1 is clean.
+			t.Cleanup(func() {
+				for _, n := range []string{"fake-mismatch", "fake-owner", "fake-twice"} {
+					service.DeregisterForTest(service.Name(n))
+				}
+			})
+
 			require.PanicsWithError(t, tc.want, tc.register)
 		})
 	}
@@ -329,6 +349,7 @@ func TestRegisterServer(t *testing.T) {
 		New:      constructClient,
 	}
 	service.RegisterClient(fakeName, clientDriver)
+	t.Cleanup(func() { service.DeregisterForTest(fakeName) })
 
 	wantBinaries := []string{"fake", "fake-quick"}
 	require.Equal(t, wantBinaries, service.Binaries(fakeName))
@@ -416,6 +437,7 @@ func TestToolDirs(t *testing.T) {
 		Bit:     1 << 29,
 		ToolDir: "/etc/fake-tool/server/sentinel-dvpn",
 	})
+	t.Cleanup(func() { service.DeregisterForTest(name) })
 
 	dir, err := service.ClientToolDir(name)
 	require.NoError(t, err)
@@ -561,6 +583,7 @@ func TestValidateMetadata(t *testing.T) {
 
 	name := service.Name("fake-metadata")
 	service.RegisterClient(name, fakeClientDriver(1<<16))
+	t.Cleanup(func() { service.DeregisterForTest(name) })
 
 	cases := []struct {
 		md      service.ServiceMetadata

@@ -52,3 +52,15 @@ func SetReadProcessArgs(read ReadProcessArgsFunc) ReadProcessArgsFunc {
 
 	return previous
 }
+
+// DeregisterForTest undoes a RegisterClient/RegisterServer so a test can run under -count>1
+// without the package-global registry panicking on the re-registration. Tests only; there is
+// no production deregister.
+func DeregisterForTest(name Name) {
+	mu.Lock()
+	defer mu.Unlock()
+
+	delete(clients, name)
+	delete(servers, name)
+	delete(protocolBits, name)
+}
