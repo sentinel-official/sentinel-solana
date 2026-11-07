@@ -116,3 +116,17 @@ func TestListen_RecoverStaleSocket(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, conn.Close())
 }
+
+// A daemon started without its socket unit makes the socket folder (/run/sentinel-dvpn/<tag>).
+func TestListen_CreatesSocketFolder(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "run", "c0", "daemon.sock")
+	ln, err := daemon.Listen(t.Context(), path, "")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = ln.Close() })
+
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+	require.Equal(t, os.ModeSocket, info.Mode().Type())
+}

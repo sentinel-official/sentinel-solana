@@ -36,7 +36,7 @@ func TestAddFlags_DaemonEndpointHelp(t *testing.T) {
 			flag.Usage,
 		)
 	default:
-		require.Equal(t, "daemon endpoint (default /var/lib/sentinel-dvpn/<tag>/daemon.sock)", flag.Usage)
+		require.Equal(t, "daemon endpoint (default /run/sentinel-dvpn/<tag>/daemon.sock)", flag.Usage)
 	}
 }
 

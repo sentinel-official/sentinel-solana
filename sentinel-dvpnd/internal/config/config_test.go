@@ -448,7 +448,9 @@ func TestLoaded_Endpoint(t *testing.T) {
 
 	if runtime.GOOS != goosWindows {
 		linux := &config.Loaded{Dir: "/var/lib/sentinel-dvpn/c0", Tag: "c0"}
-		require.Equal(t, "/var/lib/sentinel-dvpn/c0/daemon.sock", config.LoadedEndpoint(linux, goosLinux))
+		// the service home: the socket is under /run (SELinux: var_run_t), as the socket unit has it
+		require.Equal(t, "/run/sentinel-dvpn/c0/daemon.sock", config.LoadedEndpoint(linux, goosLinux))
+		require.Equal(t, "/run/sentinel-dvpn/c0/daemon.sock", config.LoadedEndpoint(&config.Loaded{Dir: "/var/lib/sentinel-dvpn/c0/", Tag: "c0"}, goosLinux))
 
 		darwin := &config.Loaded{Dir: "/Library/Application Support/sentinel-dvpn/c0", Tag: "c0"}
 		require.Equal(

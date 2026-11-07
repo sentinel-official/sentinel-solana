@@ -62,11 +62,23 @@ func (e *NotFoundError) Unwrap() error {
 type Tag string
 
 func (t Tag) Endpoint(goos string) string {
-	if goos == "windows" {
+	switch goos {
+	case "windows":
 		return `\\.\pipe\ProtectedPrefix\Administrators\` + ProductName + `\` + string(t)
+	case "linux":
+		// Under /run, not in the state folder: SELinux labels a new file from its path, and under
+		// /var/lib that is var_lib_t, which systemd (init_t) may not create a socket as. The
+		// socket unit then never came up on Fedora and EL (enforcing). /run is var_run_t, the type
+		// of every socket systemd makes there, with no extra policy or package.
+		return RuntimeDir(goos, t) + "/" + socketFileName
+	default:
+		return t.StateDir(goos) + "/" + socketFileName
 	}
+}
 
-	return t.StateDir(goos) + "/" + socketFileName
+// RuntimeDir is the Linux folder for an instance's runtime files (its control socket).
+func RuntimeDir(_ string, t Tag) string {
+	return "/run/" + ProductName + "/" + string(t)
 }
 
 func (t Tag) EnvPath() string {

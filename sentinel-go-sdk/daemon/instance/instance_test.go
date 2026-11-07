@@ -89,7 +89,7 @@ func TestStateRoot(t *testing.T) {
 		stateDir    string
 	}{
 		{
-			endpoint: "/var/lib/sentinel-dvpn/c0/daemon.sock",
+			endpoint: "/run/sentinel-dvpn/c0/daemon.sock",
 			goos:     "linux",
 			name:     "linux",
 			root:     "/var/lib/sentinel-dvpn",
@@ -154,4 +154,13 @@ func TestTag(t *testing.T) {
 	require.Equal(t, "co.sentinel.sentinel-dvpnd.n0", tag.ServiceName("darwin"))
 	require.Equal(t, "sentinel-dvpnd$n0", tag.ServiceName("windows"))
 	require.Len(t, instance.Tag("p999999999").Interface(), 15)
+}
+
+// The Linux socket is under /run (var_run_t under SELinux), never in the var_lib_t state folder,
+// where systemd's socket unit was refused (Fedora 44, Rocky 9, enforcing).
+func TestEndpoint_LinuxUnderRun(t *testing.T) {
+	t.Parallel()
+
+	require.Equal(t, "/run/sentinel-dvpn/c0/daemon.sock", instance.Tag("c0").Endpoint("linux"))
+	require.Equal(t, "/Library/Application Support/sentinel-dvpn/c0/daemon.sock", instance.Tag("c0").Endpoint("darwin"))
 }

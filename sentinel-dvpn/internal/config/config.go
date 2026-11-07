@@ -205,7 +205,7 @@ func daemonEndpointHelp() string {
 	case "windows":
 		return `daemon endpoint (default \\.\pipe\ProtectedPrefix\Administrators\sentinel-dvpn\<tag>)`
 	default:
-		return "daemon endpoint (default /var/lib/sentinel-dvpn/<tag>/daemon.sock)"
+		return "daemon endpoint (default /run/sentinel-dvpn/<tag>/daemon.sock)"
 	}
 }
 

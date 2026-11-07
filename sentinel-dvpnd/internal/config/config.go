@@ -153,6 +153,12 @@ func (l *Loaded) endpoint(goos string) string {
 		return l.Tag.Endpoint(goos)
 	}
 
+	// The default home is the service's: the socket unit, the CLI and the daemon agree on the
+	// instance endpoint. A home given with --home keeps its socket inside it.
+	if goos == "linux" && filepath.Clean(l.Dir) == l.Tag.StateDir(goos) {
+		return l.Tag.Endpoint(goos)
+	}
+
 	return filepath.Join(l.Dir, daemonv1.SocketFileName)
 }
 

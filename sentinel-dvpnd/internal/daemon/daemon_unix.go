@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"os/user"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"syscall"
@@ -47,6 +48,10 @@ func Listen(ctx context.Context, endpoint, group string) (net.Listener, error) {
 
 	if err := ctx.Err(); err != nil {
 		return nil, fmt.Errorf("starting daemon listener: %w", err)
+	}
+
+	if err := os.MkdirAll(filepath.Dir(endpoint), 0o755); err != nil {
+		return nil, fmt.Errorf("creating the socket folder: %w", err)
 	}
 
 	if err := os.Remove(endpoint); err != nil && !errors.Is(err, os.ErrNotExist) {

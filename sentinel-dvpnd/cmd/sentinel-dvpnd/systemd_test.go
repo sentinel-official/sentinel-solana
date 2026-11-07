@@ -104,7 +104,8 @@ func TestRenderSystemdSocket(t *testing.T) {
 Description=Sentinel dVPN daemon control socket (%i)
 
 [Socket]
-ListenStream=/var/lib/sentinel-dvpn/%i/daemon.sock
+ListenStream=/run/sentinel-dvpn/%i/daemon.sock
+Symlinks=/var/lib/sentinel-dvpn/%i/daemon.sock
 SocketMode=0660
 SocketGroup=sentinel-dvpn
 RemoveOnStop=yes

@@ -60,6 +60,7 @@ Description=Sentinel dVPN daemon control socket (%i)
 
 [Socket]
 ListenStream={{ .Endpoint }}
+Symlinks={{ .StateDir }}/daemon.sock
 SocketMode=0660
 SocketGroup={{ .Group }}
 RemoveOnStop=yes
