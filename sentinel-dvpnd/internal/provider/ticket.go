@@ -100,11 +100,15 @@ func (r *Runtime) reserveTicket(
 			return fmt.Errorf("loading subscription allocation: %w", err)
 		}
 
+		// Only tickets of THIS opening count: a cancelled and re-bought subscription has the same
+		// address (PDA), and the old opening's unexpired tickets blocked a new server for up to a
+		// ticket TTL.
 		var active int64
 		if err := dbtx.Model(&Ticket{}).Where(
-			"subscription = ? AND expires_unix > ?",
+			"subscription = ? AND expires_unix > ? AND issued_unix >= ?",
 			row.Address,
 			now.Unix(),
+			sub.OpenedAt,
 		).Count(&active).Error; err != nil {
 			return err
 		}
@@ -115,7 +119,7 @@ func (r *Runtime) reserveTicket(
 
 		capacity := uint64(sub.DataCapGB) * session.BytesPerGB
 
-		dataCap := ticketDataCap(capacity, row.AllocatedBytes, r.cfg.Tickets.DataCapBytes)
+		dataCap := ticketDataCap(capacity, row.AllocatedBytes, fairTicketCap(capacity, sub.MaxConnections, r.cfg.Tickets.DataCapBytes))
 		if capacity != 0 && dataCap == 0 {
 			return api.ErrInvalidTicket
 		}
@@ -185,6 +189,23 @@ func (r *Runtime) verifyTicketRequest(
 	}
 
 	return request, sub, nil
+}
+
+// fairTicketCap: a ticket reserves its data cap from the plan until it expires, so with the
+// configured per-ticket cap larger than capacity / max_connections the last connections the plan
+// allows could never get a ticket (5 GB plan, 6 connections, 1 GB tickets: the 6th always got
+// invalid_ticket). Each ticket is held to an equal share of the plan's data.
+func fairTicketCap(capacity uint64, maxConnections uint8, cfgCap uint64) uint64 {
+	if capacity == 0 || maxConnections == 0 {
+		return cfgCap
+	}
+
+	share := max(capacity/uint64(maxConnections), 1)
+	if cfgCap == 0 || cfgCap > share {
+		return share
+	}
+
+	return cfgCap
 }
 
 func ticketDataCap(capacity, allocated, cfgCap uint64) uint64 {
