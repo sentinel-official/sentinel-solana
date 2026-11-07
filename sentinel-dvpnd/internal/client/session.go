@@ -376,11 +376,8 @@ func (r *Runtime) teardown(ctx context.Context, conn *connection, reason string)
 
 	sessionID := conn.session.ID
 
-	closed := conn.remoteClosed
-	if conn.nodeClient != nil {
-		closed = r.closeRemoteSession(ctx, conn.nodeClient, sessionID) || closed
-	}
-
+	// The final sample comes first: closing the session on the node ends the node's side of the tunnel (an
+	// OpenVPN server drops the peer and the client's tun device goes with it), and sampling is local only.
 	finalSample := false
 
 	if conn.service != nil {
@@ -393,7 +390,14 @@ func (r *Runtime) teardown(ctx context.Context, conn *connection, reason string)
 		if err != nil {
 			r.log.Warn().Err(err).Msg("sampling final session usage failed")
 		}
+	}
 
+	closed := conn.remoteClosed
+	if conn.nodeClient != nil {
+		closed = r.closeRemoteSession(ctx, conn.nodeClient, sessionID) || closed
+	}
+
+	if conn.service != nil {
 		r.stopService(ctx, conn.service)
 	}
 
