@@ -77,7 +77,28 @@ type PaymasterConfig struct {
 	Fallback        bool   `json:"fallback"           toml:"fallback"`
 	FeeToken        string `json:"fee_token"          toml:"fee_token"`
 	MaxFeeBaseUnits uint64 `json:"max_fee_base_units" toml:"max_fee_base_units"`
-	URL             string `json:"url"                toml:"url"                validate:"omitempty,url"`
+	// URL is the kora JSON-RPC endpoint, under the key "endpoint". It was "url", which [rpc] url shares, so a
+	// line edit of the RPC URL changed the paymaster too. LegacyURL still reads the old key, flag and env.
+	URL       string `json:"endpoint" toml:"endpoint"      validate:"omitempty,url"`
+	LegacyURL string `json:"-"        toml:"url,omitempty" validate:"omitempty,url"`
+}
+
+// ErrPaymasterURLConflict is returned when the endpoint and the deprecated url both hold different values.
+var ErrPaymasterURLConflict = errors.New("tx.paymaster: endpoint and the deprecated url differ; set endpoint only")
+
+// ResolveLegacy moves the deprecated url into the endpoint. Loaders call it after decoding.
+func (c *PaymasterConfig) ResolveLegacy() error {
+	if c.LegacyURL == "" {
+		return nil
+	}
+
+	if c.URL != "" && c.URL != c.LegacyURL {
+		return ErrPaymasterURLConflict
+	}
+
+	c.URL, c.LegacyURL = c.LegacyURL, ""
+
+	return nil
 }
 
 type ProgramIDs struct {

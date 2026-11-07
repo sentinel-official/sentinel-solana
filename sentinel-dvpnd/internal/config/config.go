@@ -312,6 +312,10 @@ func Load(tag instance.Tag, home string, flags *pflag.FlagSet) (*Loaded, error) 
 		return nil, err
 	}
 
+	if err := file.Tx.Paymaster.ResolveLegacy(); err != nil {
+		return nil, fmt.Errorf("validating %s: %w", v.ConfigFileUsed(), err)
+	}
+
 	if !RoleSupported(file.Daemon.Role) {
 		return nil, fmt.Errorf("%w: %s", ErrUnsupportedRole, file.Daemon.Role)
 	}

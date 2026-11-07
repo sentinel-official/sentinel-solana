@@ -72,7 +72,9 @@ func AddFlags(flags *pflag.FlagSet) {
 	flags.Bool("tx.paymaster.fallback", false, "pay fees and rent with the signing key when the paymaster fails")
 	flags.String("tx.paymaster.fee-token", "", "paymaster fee token mint `address` (default the program mint)")
 	flags.Uint64("tx.paymaster.max-fee-base-units", 0, "paymaster max fee `amount` in base units (default 0, no max)")
-	flags.String("tx.paymaster.url", "", "kora paymaster json-rpc URL; its signer pays fees and rent (default none)")
+	flags.String("tx.paymaster.endpoint", "", "kora paymaster json-rpc URL; its signer pays fees and rent (default none)")
+	flags.String("tx.paymaster.url", "", "deprecated: use --tx.paymaster.endpoint")
+	_ = flags.MarkDeprecated("tx.paymaster.url", "use --tx.paymaster.endpoint")
 	flags.Uint64("tx.priority-fee-lamports", 0, "fixed priority fee `amount` in lamports (default 0)")
 	flags.String("tx.priority-fee-mode", "", "priority fee mode: auto, fixed, or never (default auto)")
 }
@@ -159,6 +161,10 @@ func Load(home string, flags *pflag.FlagSet) (*File, error) {
 	}
 
 	if err := validate.Struct(&cfg); err != nil {
+		return nil, fmt.Errorf("validating config: %w", err)
+	}
+
+	if err := cfg.Tx.Paymaster.ResolveLegacy(); err != nil {
 		return nil, fmt.Errorf("validating config: %w", err)
 	}
 
