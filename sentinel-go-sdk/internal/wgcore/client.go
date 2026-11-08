@@ -31,6 +31,7 @@ type Client[E service.Validator] struct {
 	conf            string
 	live            string
 	log             zerolog.Logger
+	noIPv6          bool
 	placement       service.Placement
 	privateKey      string
 	publicKey       string
@@ -109,6 +110,12 @@ func (c *Client[E]) PeerRequest(_ context.Context) (service.PeerRequest, error) 
 	return packed, nil
 }
 
+// SetTunnelIPv6 sets whether IPv6 is routed into the tunnel, which is the default. It applies from the
+// next Start. With it off, AllowedIPs holds IPv4 only, so IPv6 is left to the host and its firewall.
+func (c *Client[E]) SetTunnelIPv6(on bool) {
+	c.noIPv6 = !on
+}
+
 func (c *Client[E]) ProxyEndpoint() string {
 	return ""
 }
@@ -121,7 +128,7 @@ func (c *Client[E]) Start(ctx context.Context, host string, resp service.PeerRes
 
 	data := clientTemplateData[E]{
 		Addresses:        p.Addresses,
-		AllowedIPs:       allowedIPs(runtime.GOOS),
+		AllowedIPs:       allowedIPs(runtime.GOOS, c.noIPv6),
 		Endpoint:         net.JoinHostPort(host, strconv.Itoa(int(p.Port))),
 		Extensions:       p.Extensions,
 		KeepaliveSeconds: persistentKeepaliveSeconds,
@@ -250,12 +257,17 @@ type clientTemplateData[E service.Validator] struct {
 	PublicKey        string
 }
 
-func allowedIPs(goos string) string {
+func allowedIPs(goos string, noIPv6 bool) string {
+	v4, v6 := "0.0.0.0/0", "::/0"
 	if goos == "windows" {
-		return "0.0.0.0/1, 128.0.0.0/1, ::/1, 8000::/1"
+		v4, v6 = "0.0.0.0/1, 128.0.0.0/1", "::/1, 8000::/1"
 	}
 
-	return "0.0.0.0/0, ::/0"
+	if noIPv6 {
+		return v4
+	}
+
+	return v4 + ", " + v6
 }
 
 func downAfterFailedStart(ctx context.Context, r runner, conf string) {

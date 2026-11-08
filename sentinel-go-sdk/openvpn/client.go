@@ -36,6 +36,7 @@ type Client struct {
 	interfaceNames     func() (map[string]bool, error)
 	live               string
 	log                zerolog.Logger
+	noIPv6             bool
 	placement          service.Placement
 	process            *service.ProcessManager
 	uuid               string
@@ -352,6 +353,12 @@ func (c *Client) signalStop(ctx context.Context) {
 	}
 }
 
+// SetTunnelIPv6 sets whether IPv6 is routed into the tunnel, which is the default. It applies from the
+// next Start. With it off, redirect-gateway takes IPv4 only, so IPv6 is left to the host and its firewall.
+func (c *Client) SetTunnelIPv6(on bool) {
+	c.noIPv6 = !on
+}
+
 func (c *Client) writeConf(host string, resp PeerResponse) (string, error) {
 	authPath := c.placement.ToolPath(".auth.txt")
 	caPath := c.placement.ToolPath(".ca.crt")
@@ -373,6 +380,7 @@ func (c *Client) writeConf(host string, resp PeerResponse) (string, error) {
 		Dev:            dev,
 		DevNode:        devNode,
 		Host:           host,
+		IPv6:           !c.noIPv6,
 		ManagementPort: c.cfg.ManagementPort,
 		Port:           resp.Port,
 		Protocol:       resp.Protocol,
@@ -406,6 +414,7 @@ type clientTemplateData struct {
 	Dev            string
 	DevNode        string
 	Host           string
+	IPv6           bool
 	ManagementPort uint16
 	Port           uint16
 	Protocol       string

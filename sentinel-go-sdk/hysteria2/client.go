@@ -23,9 +23,17 @@ type Client struct {
 	iface     string
 	live      string
 	log       zerolog.Logger
+	noIPv6    bool
 	placement service.Placement
 	process   *service.ProcessManager
 	uuid      string
+}
+
+// SetTunnelIPv6 sets whether IPv6 is routed into the tunnel, which is the default. It applies from
+// the next Start. With it off, only the tunnel's own IPv6 prefix is routed, so the rest of IPv6 is
+// left to the host and its firewall.
+func (c *Client) SetTunnelIPv6(on bool) {
+	c.noIPv6 = !on
 }
 
 func NewClient(_ ClientConfig, p service.Placement, log zerolog.Logger) (service.Client, error) {
@@ -112,7 +120,7 @@ func (c *Client) Start(ctx context.Context, host string, resp service.PeerRespon
 		}
 	}
 
-	if err := writeConf(c.conf, addr, c.iface, p); err != nil {
+	if err := writeConf(c.conf, addr, c.iface, p, c.noIPv6); err != nil {
 		return err
 	}
 
@@ -205,8 +213,13 @@ type clientTemplateData struct {
 	ExcludeV6    string
 	Interface    string
 	ObfsPassword string
+	RouteV6      string
 	TLSPin       string
 }
+
+// tunPrefixV6 is the tunnel's own IPv6 prefix (templates/client.yaml.tmpl). Routing only it keeps
+// IPv6 out of the tunnel: with an empty list sing-tun would route all of IPv6.
+const tunPrefixV6 = "2001::ffff:ffff:ffff:fff0/126"
 
 func resolveHost(ctx context.Context, host string) (netip.Addr, error) {
 	if addr, err := netip.ParseAddr(host); err == nil {
@@ -230,13 +243,18 @@ func resolveHost(ctx context.Context, host string) (netip.Addr, error) {
 	return addr.Unmap(), nil
 }
 
-func writeConf(path string, addr netip.Addr, iface string, resp PeerResponse) error {
+func writeConf(path string, addr netip.Addr, iface string, resp PeerResponse, noIPv6 bool) error {
 	data := clientTemplateData{
 		Auth:         resp.Auth,
 		Endpoint:     net.JoinHostPort(addr.String(), strconv.Itoa(int(resp.Port))),
 		Interface:    iface,
 		ObfsPassword: resp.ObfsPassword,
+		RouteV6:      "::/0",
 		TLSPin:       resp.TLSPin,
+	}
+
+	if noIPv6 {
+		data.RouteV6 = tunPrefixV6
 	}
 
 	exclude := netip.PrefixFrom(addr, addr.BitLen()).String()
