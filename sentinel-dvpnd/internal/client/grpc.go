@@ -103,6 +103,10 @@ func (g *grpcServer) StartSession(
 	switch {
 	case errors.Is(err, errDaemonStopping):
 		return nil, daemonv1.ToStatus(fmt.Errorf("%w: %w", daemonv1.ErrUnavailable, err))
+	case errors.Is(err, errChainUnreachable):
+		g.runtime.log.Warn().Err(err).Msg("session not started: the chain rpc did not answer")
+
+		return nil, daemonv1.ToStatus(fmt.Errorf("%w: %w", daemonv1.ErrUnavailable, errChainUnreachable))
 	case err != nil:
 		return nil, daemonv1.ToStatus(fmt.Errorf("%w: %w", daemonv1.ErrFailedPrecondition, err))
 	}

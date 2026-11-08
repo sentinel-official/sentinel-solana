@@ -128,6 +128,10 @@ func (r *Runtime) connect(
 	}
 
 	nodeAccount, err := r.programClient.FetchNode(ctx, nodeAddress)
+	if chainUnreachable(err) {
+		return nil, fmt.Errorf("%w: fetching node account %s: %w", errChainUnreachable, nodeAddress, err)
+	}
+
 	if err != nil {
 		return nil, fmt.Errorf("fetching node account %s: %w", nodeAddress, err)
 	}
