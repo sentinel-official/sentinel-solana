@@ -384,3 +384,49 @@ func newFeeTransfer(t *testing.T, home testutil.Home, paymasterAddress solana.Pu
 		Quoted:       []solana.Instruction{transfer},
 	}
 }
+
+func TestRuntime_Redeem_ConcurrentPassesRedeemOnce(t *testing.T) {
+	t.Parallel()
+
+	r, home, _ := newRuntime(t)
+	address := seedChannel(t, r, home, home.OwnerKey, dvpn.PositionModeVoucher)
+	cumulative := home.Loaded.Node.Redeem.ThresholdBaseUnits * 2
+	seedPosition(t, r, home, address, cumulative)
+	// Settled up to the voucher, so the whole amount is due whichever way the claim is measured.
+	require.NoError(t, home.DB.Model(&node.Position{}).Where("address = ?", address.String()).
+		Update("settled", cumulative).Error)
+
+	// The hourly job, position sync and RedeemNow all call the same pass; start four at once.
+	const passes = 4
+
+	var wg sync.WaitGroup
+
+	start := make(chan struct{})
+	errs := make([]error, passes)
+
+	for i := range passes {
+		wg.Go(func() {
+			<-start
+
+			errs[i] = node.Redeem(t.Context(), r)
+		})
+	}
+
+	close(start)
+	wg.Wait()
+
+	for _, err := range errs {
+		require.NoError(t, err)
+	}
+
+	require.Len(t, home.RPC.Sent(), 1, "the due position is redeemed by one transaction")
+
+	var redemptions []node.Redemption
+	require.NoError(t, home.DB.WithContext(t.Context()).Find(&redemptions).Error)
+	require.Len(t, redemptions, 1)
+	require.Equal(t, node.RedemptionStatusConfirmed, redemptions[0].Status)
+
+	var position node.Position
+	require.NoError(t, home.DB.WithContext(t.Context()).First(&position, "address = ?", address.String()).Error)
+	require.Equal(t, cumulative, position.Redeemed, "the position is advanced, not left due")
+}
