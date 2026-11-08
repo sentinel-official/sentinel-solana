@@ -322,6 +322,19 @@ func (r *Runtime) sample(ctx context.Context, conn *connection, now time.Time) (
 	stats, err := conn.service.Stats(sctx)
 	if err != nil {
 		conn.statsFailures++
+
+		// The tunnel no longer answers (its process died, its interface is gone): say so on the first
+		// failed read, while the session is still active, instead of a healthy status until the
+		// session ends maxStatsFailures samples later. The next good read clears it.
+		r.mu.Lock()
+		if conn.session.Status == SessionStatusActive && conn.session.Error == "" {
+			conn.session.Error = reasonStatsUnavailable
+			if r.connection == conn {
+				r.publishLocked()
+			}
+		}
+		r.mu.Unlock()
+
 		if conn.statsFailures >= maxStatsFailures {
 			return session.Usage{}, fmt.Errorf("%w: %w", errStatsUnavailable, err)
 		}
@@ -333,6 +346,10 @@ func (r *Runtime) sample(ctx context.Context, conn *connection, now time.Time) (
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
+
+	if conn.session.Status == SessionStatusActive && conn.session.Error == reasonStatsUnavailable {
+		conn.session.Error = ""
+	}
 
 	rx := stats.RxBytes - min(stats.RxBytes, conn.session.RxBytes)
 	tx := stats.TxBytes - min(stats.TxBytes, conn.session.TxBytes)
