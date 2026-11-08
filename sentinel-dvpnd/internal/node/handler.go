@@ -40,7 +40,7 @@ func (h *handler) CloseSession(
 		return nil, err
 	}
 
-	if err := h.runtime.closeSession(ctx, sess, nodeapi.ReasonClient); err != nil {
+	if err := h.runtime.closeForClient(ctx, sess); err != nil {
 		return nil, err
 	}
 

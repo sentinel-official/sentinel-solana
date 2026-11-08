@@ -157,7 +157,12 @@ func (r *Runtime) retryClosingSessions(ctx context.Context) error {
 		return fmt.Errorf("loading closing sessions: %w", err)
 	}
 
+	now := time.Now()
 	for i := range sessions {
+		if r.closeDeferred(sessions[i].ID, now) {
+			continue
+		}
+
 		if err := r.closeSession(ctx, &sessions[i], nodeapi.ReasonRetry); err != nil {
 			r.log.Warn().Err(err).Str("session", sessions[i].ID).Msg("close still failing")
 		}

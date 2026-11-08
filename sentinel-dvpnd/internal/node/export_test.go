@@ -4,6 +4,7 @@ package node
 
 import (
 	"context"
+	"time"
 
 	"github.com/solana-foundation/solana-go/v2"
 
@@ -61,6 +62,12 @@ func BuildMetadata(ctx context.Context, r *Runtime) (nodeapi.Metadata, error) {
 func ChainState(r *Runtime) (dvpn.Config, dvpn.Node) { return r.chainState() }
 
 func ClearLeftovers(ctx context.Context, r *Runtime) error { return r.clearLeftovers(ctx) }
+
+func CloseForClient(ctx context.Context, r *Runtime, sess *Session) error {
+	return r.closeForClient(ctx, sess)
+}
+
+func SetCloseGrace(r *Runtime, d time.Duration) { r.closeGrace = d }
 
 func CloseSession(ctx context.Context, r *Runtime, sess *Session, reason string) error {
 	return r.closeSession(ctx, sess, reason)

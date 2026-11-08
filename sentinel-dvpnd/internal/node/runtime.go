@@ -41,6 +41,9 @@ const (
 	hnsdDirName        = "hnsd"
 	hnsdPeers          = 8
 	serviceStopTimeout = 10 * time.Second
+	// clientCloseGrace is how long a client-requested close keeps the peer, so the 204 can still travel back
+	// through the tunnel it closes.
+	clientCloseGrace = 2 * time.Second
 )
 
 const (
@@ -64,7 +67,9 @@ type Runtime struct {
 	cfg             *config.Node
 	chainCfg        dvpn.Config
 	chainNode       dvpn.Node
+	closeGrace      time.Duration
 	closeMu         sync.Mutex
+	closeNotBefore  map[string]time.Time
 	db              *gorm.DB
 	dial            dialFunc
 	dir             string
@@ -374,6 +379,8 @@ func New(
 		db:              db,
 		dial:            api.NewPeerDialer(net.DefaultResolver.LookupNetIP, loaded.File.Peer.AllowPrivate),
 		dir:             loaded.Dir,
+		closeGrace:      clientCloseGrace,
+		closeNotBefore:  map[string]time.Time{},
 		enforcers:       map[string]session.Enforcer{},
 		events:          newEventHub(),
 		iface:           loaded.Tag.Interface(),

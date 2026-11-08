@@ -61,6 +61,45 @@ func (r *Runtime) closeSession(ctx context.Context, sess *Session, reason string
 	return r.markClosed(ctx, sess, reason, now)
 }
 
+// closeForClient handles a close the client asked for over the tunnel. It settles the session now and leaves
+// the peer in place: removing it before the 204 is written drops the reply on WireGuard, AmneziaWG and OpenVPN
+// (the reply's route is the peer just removed), so the client times out on a close that succeeded.
+// retryClosingSessions removes the peer and marks the session closed once the grace has passed.
+func (r *Runtime) closeForClient(ctx context.Context, sess *Session) error {
+	r.closeMu.Lock()
+	defer r.closeMu.Unlock()
+
+	if err := r.db.WithContext(ctx).First(sess, "id = ?", sess.ID).Error; err != nil {
+		return fmt.Errorf("reloading session: %w", err)
+	}
+
+	if sess.Status != SessionStatusActive {
+		return nil
+	}
+
+	if err := r.settleSession(ctx, sess, nodeapi.ReasonClient, time.Now().Unix()); err != nil {
+		return err
+	}
+
+	if sess.Status == SessionStatusClosing {
+		r.mu.Lock()
+		r.closeNotBefore[sess.ID] = time.Now().Add(r.closeGrace)
+		r.mu.Unlock()
+	}
+
+	return nil
+}
+
+// closeDeferred reports whether a client-requested close is still inside its grace.
+func (r *Runtime) closeDeferred(id string, now time.Time) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	until, ok := r.closeNotBefore[id]
+
+	return ok && now.Before(until)
+}
+
 func (r *Runtime) countActiveSessions(ctx context.Context) (int64, error) {
 	var count int64
 
@@ -111,6 +150,7 @@ func (r *Runtime) markClosed(ctx context.Context, sess *Session, reason string, 
 	r.mu.Lock()
 	delete(r.enforcers, sess.ID)
 	delete(r.voucherRequests, sess.ID)
+	delete(r.closeNotBefore, sess.ID)
 	r.mu.Unlock()
 
 	r.log.Info().Str("session", sess.ID).Str("reason", reason).Msg("session closed")
