@@ -26,7 +26,7 @@ func (g *grpcServer) GetSession(
 	ctx context.Context,
 	req *daemonv1.GetSessionRequest,
 ) (*daemonv1.GetSessionResponse, error) {
-	if s, ok := g.runtime.current(); ok && s.ID == req.GetId() {
+	if s, ok := g.runtime.liveSession(req.GetId()); ok {
 		return &daemonv1.GetSessionResponse{Session: toProtoSession(s)}, nil
 	}
 
