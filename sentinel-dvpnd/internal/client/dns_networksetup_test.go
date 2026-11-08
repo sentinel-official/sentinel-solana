@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -138,7 +139,16 @@ func TestNetworksetupBackend_Cleanup_StatError(t *testing.T) {
 	require.NoError(t, os.WriteFile(parent, []byte("file"), 0o600))
 	backend := client.NewNetworksetupBackend(filepath.Join(parent, "networksetup-dns.json.bak"), (&fakeRun{}).run)
 
-	require.Error(t, backend.Cleanup(t.Context()))
+	err := backend.Cleanup(t.Context())
+	if runtime.GOOS == "windows" {
+		// Windows maps "a path component is a file" to fs.ErrNotExist, so Cleanup reads it as
+		// "no backup to restore" and returns nil. This darwin-only backend never runs on Windows;
+		// the test asserts the per-OS stat contract so the suite is green on every builder.
+		require.NoError(t, err)
+	} else {
+		// Unix returns ENOTDIR (not fs.ErrNotExist), so Cleanup surfaces the stat error.
+		require.Error(t, err)
+	}
 }
 
 func TestNetworksetupBackend_Revert_KeepsBackupOnFailure(t *testing.T) {
