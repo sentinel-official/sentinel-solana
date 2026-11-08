@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -149,7 +151,15 @@ func TestRun_ClientChecks(t *testing.T) {
 }
 
 func TestRun_MintMismatch(t *testing.T) {
-	t.Parallel()
+	// Hermetic: provide the wireguard node binaries on a private PATH so the service-binary and
+	// userspace checks assert node state, not whatever the host happens to have installed.
+	// t.Setenv forbids t.Parallel, so this test runs non-parallel (like the other PATH tests).
+	binDir := t.TempDir()
+	for _, b := range []string{"wg", "wg-quick", "wireguard-go"} {
+		require.NoError(t, os.WriteFile(filepath.Join(binDir, b), []byte("#!/bin/sh\n"), 0o755))
+	}
+
+	t.Setenv("PATH", binDir)
 
 	fakeRPC := sdktest.NewFakeRPC(t)
 	programID := dvpn.ProgramID
