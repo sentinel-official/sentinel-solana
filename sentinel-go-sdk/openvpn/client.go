@@ -38,6 +38,7 @@ type Client struct {
 	log                zerolog.Logger
 	placement          service.Placement
 	process            *service.ProcessManager
+	routes             hostRoute
 	uuid               string
 }
 
@@ -74,6 +75,7 @@ func newClient(
 		log:                log,
 		placement:          p,
 		process:            service.NewProcessManager(binary, p.Dir, log, opts...),
+		routes:             newHostRoute(p.ToolPath(".route"), runtime.GOOS),
 	}
 }
 
@@ -82,7 +84,10 @@ func (c *Client) Cleanup(ctx context.Context) error {
 		return err
 	}
 
+	routeErr := c.routes.clear(ctx) // before RemoveOwned, which removes the record
+
 	return errors.Join(
+		routeErr,
 		c.deleteLeftoverAdapter(ctx),
 		service.RemoveOwned(c.placement.ToolDir, c.placement.Interface),
 	)
@@ -185,6 +190,11 @@ func (c *Client) Start(ctx context.Context, host string, resp service.PeerRespon
 		return nil
 	}
 
+	routeBefore, trackRoute, err := c.routes.lookup(ctx, host)
+	if err != nil {
+		c.log.Warn().Err(err).Msg("host route not tracked")
+	}
+
 	if err := c.process.Launch(ctx, cmd, probe); err != nil {
 		stopCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), service.FailedStartStopTimeout)
 		defer cancel()
@@ -193,6 +203,12 @@ func (c *Client) Start(ctx context.Context, host string, resp service.PeerRespon
 	}
 
 	succeeded = true
+
+	if trackRoute && err == nil {
+		if err := c.routes.record(ctx, host, routeBefore); err != nil {
+			c.log.Warn().Err(err).Msg("host route not recorded")
+		}
+	}
 
 	c.log.Info().Str("iface", c.Interface()).Str("process", binary).Msg("service started")
 
@@ -224,7 +240,8 @@ func (c *Client) Stop(ctx context.Context) error {
 			return err
 		}
 
-		err := errors.Join(c.deleteAdapter(ctx), service.RemoveOwned(c.placement.ToolDir, c.placement.Interface))
+		routeErr := c.routes.clear(ctx) // a clean exit removed it already; after a kill it is still there
+		err := errors.Join(routeErr, c.deleteAdapter(ctx), service.RemoveOwned(c.placement.ToolDir, c.placement.Interface))
 		if err != nil {
 			return err
 		}

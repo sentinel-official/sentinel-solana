@@ -2,6 +2,7 @@ package openvpn
 
 import (
 	"bufio"
+	"context"
 	"io"
 
 	"github.com/rs/zerolog"
@@ -63,3 +64,8 @@ func SetClientInterfaceHooks(
 func TunDirectives(iface, goos string) (string, string) { return tunDirectives(iface, goos) }
 
 func ValidateTLSCrypt(text string) error { return validateTLSCrypt(text) }
+
+func SetHostRouteRunner(c *Client, goos string, run func(context.Context, service.Command) ([]byte, error)) {
+	c.routes.goos = goos
+	c.routes.run = run
+}

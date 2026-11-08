@@ -117,11 +117,15 @@ func TestClient_Start_CanceledReadinessCleansUp(t *testing.T) {
 	recorder := &recordingTapctl{}
 	recorder.attach(client)
 
-	ctx, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
+	// The management stub never reports CONNECTED, so Start always waits out this deadline. It has to
+	// leave room for the launch itself: with a few hundred ms, a loaded machine could reach the deadline
+	// before openvpn started, and then there was no process to check (nil).
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 	defer cancel()
 
 	err := client.Start(ctx, "203.0.113.1", peerResponseFixture(t, client))
 	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.NotNil(t, process(), "openvpn was started before the deadline")
 	require.ErrorIs(t, process().Wait(t.Context()), service.ErrProcessExited)
 	require.NoFileExists(t, placement.ToolPath(".conf"))
 	require.Equal(t, []string{"create dvpn-c0", "delete dvpn-c0"}, recorder.verbs)
