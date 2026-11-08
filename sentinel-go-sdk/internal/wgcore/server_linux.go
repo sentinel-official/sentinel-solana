@@ -20,22 +20,24 @@ const (
 var _ service.PeerRestorer = (*Server[service.Validator])(nil)
 
 type Server[E service.Validator] struct {
-	cfg       ServerConfig[E]
-	conf      string
-	egress    service.Egress
-	log       zerolog.Logger
-	metadata  service.ServiceMetadata
-	mu        sync.Mutex
-	peers     *service.Peers[[]netip.Prefix]
-	placement service.Placement
-	pool      *service.Pool
-	publicKey string
-	runner    runner
-	setup     setupFunc
-	started   bool
-	stop      service.StopOnce
-	stopped   chan struct{}
-	variant   Variant
+	cfg    ServerConfig[E]
+	conf   string
+	egress service.Egress
+	// flushConntrack drops a removed peer's connection-tracking entries; a field so tests can stub it.
+	flushConntrack func([]netip.Addr) (uint, error)
+	log            zerolog.Logger
+	metadata       service.ServiceMetadata
+	mu             sync.Mutex
+	peers          *service.Peers[[]netip.Prefix]
+	placement      service.Placement
+	pool           *service.Pool
+	publicKey      string
+	runner         runner
+	setup          setupFunc
+	started        bool
+	stop           service.StopOnce
+	stopped        chan struct{}
+	variant        Variant
 }
 
 func NewServer[E service.Validator](
@@ -75,17 +77,18 @@ func newServer[E service.Validator](
 	}
 
 	return &Server[E]{
-		cfg:       cfg,
-		conf:      p.ToolPath(".conf"),
-		log:       service.ScopeLogger(log, v.Name),
-		peers:     service.NewPeers[[]netip.Prefix](),
-		placement: p,
-		pool:      pool,
-		publicKey: key,
-		runner:    r,
-		setup:     setup,
-		stopped:   make(chan struct{}),
-		variant:   v,
+		cfg:            cfg,
+		conf:           p.ToolPath(".conf"),
+		flushConntrack: flushConntrack,
+		log:            service.ScopeLogger(log, v.Name),
+		peers:          service.NewPeers[[]netip.Prefix](),
+		placement:      p,
+		pool:           pool,
+		publicKey:      key,
+		runner:         r,
+		setup:          setup,
+		stopped:        make(chan struct{}),
+		variant:        v,
 	}, nil
 }
 
@@ -192,6 +195,20 @@ func (s *Server[E]) RemovePeer(ctx context.Context, id service.PeerID) error {
 
 	if err := s.peers.Remove(id); err != nil {
 		return err
+	}
+
+	// Before the addresses can go to another peer: drop the NAT flows this peer left open. Replies to
+	// them would otherwise be routed into the tunnel to whichever peer gets the address next.
+	addrs := make([]netip.Addr, 0, len(prefixes))
+	for _, p := range prefixes {
+		addrs = append(addrs, p.Addr())
+	}
+
+	if n, err := s.flushConntrack(addrs); err != nil {
+		s.log.Warn().Err(err).Str("peer", string(id)).Uint("deleted", n).
+			Msg("could not clear the peer connection tracking; the round-robin pool still delays reuse of its address")
+	} else if n > 0 {
+		s.log.Debug().Str("peer", string(id)).Uint("deleted", n).Msg("peer connection tracking cleared")
 	}
 
 	s.pool.Release(prefixes)

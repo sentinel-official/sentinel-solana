@@ -104,26 +104,48 @@ func (p *Pool) Reserve(addr netip.Addr) error {
 	return fmt.Errorf("%w: address %s outside pool", validate.ErrInvalidConfig, addr)
 }
 
+// family hands out addresses round-robin: next starts after the last address it gave out, so an
+// address released a moment ago is not handed to the next peer while others are free. A
+// lowest-free pool gave every new WireGuard peer the address of the one that just left, and NAT
+// flows still open for the old peer were delivered to, and billed against, the new one.
 type family struct {
 	prefix netip.Prefix
 	self   netip.Addr
 	used   map[netip.Addr]bool
+	cursor netip.Addr // last address handed out; zero before the first
 }
 
 func (f *family) next() (netip.Addr, bool) {
-	for addr := f.prefix.Addr().Next(); f.prefix.Contains(addr); addr = addr.Next() {
-		if addr == f.self || f.used[addr] {
+	first := f.prefix.Addr().Next()
+	start := first
+	if f.cursor.IsValid() && f.prefix.Contains(f.cursor.Next()) {
+		start = f.cursor.Next()
+	}
+
+	// One full lap from start, wrapping to the first host address at the end of the prefix.
+	for addr, wrapped := start, false; ; {
+		if !f.prefix.Contains(addr) || (addr.Is4() && !f.prefix.Contains(addr.Next())) {
+			if wrapped || start == first {
+				return netip.Addr{}, false
+			}
+
+			addr, wrapped = first, true
+
 			continue
 		}
 
-		if addr.Is4() && !f.prefix.Contains(addr.Next()) {
+		if wrapped && addr == start {
 			return netip.Addr{}, false
 		}
 
-		return addr, true
-	}
+		if addr != f.self && !f.used[addr] {
+			f.cursor = addr
 
-	return netip.Addr{}, false
+			return addr, true
+		}
+
+		addr = addr.Next()
+	}
 }
 
 func ParsePrefixes(values []string) ([]netip.Prefix, error) {

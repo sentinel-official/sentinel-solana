@@ -104,7 +104,8 @@ func TestServer_AddPeer_Rollback(t *testing.T) {
 	var p wgcore.PeerResponse[plainExtensions]
 	require.NoError(t, resp.Unpack(&p))
 
-	wantAddresses := []string{"10.0.0.2/32"}
+	// Round-robin pool: the address just released is not handed out again while others are free.
+	wantAddresses := []string{"10.0.0.3/32"}
 	require.Equal(t, wantAddresses, p.Addresses)
 }
 
@@ -361,7 +362,8 @@ func TestServer_Start_ThenStop(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, again.Unpack(&p))
 
-	wantAddresses2 := []string{"10.0.0.2/32"}
+	// Round-robin pool: the address just released is not handed out again while others are free.
+	wantAddresses2 := []string{"10.0.0.3/32"}
 	require.Equal(t, wantAddresses2, p.Addresses)
 
 	require.NoError(t, s.Stop(t.Context()))
