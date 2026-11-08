@@ -2,6 +2,7 @@ package hysteria2
 
 import (
 	"context"
+	"errors"
 	"net"
 	"net/http"
 
@@ -27,11 +28,34 @@ func NewServerForTest(
 	statsAddr string,
 	opts ...service.ProcessManagerOption,
 ) (*Server, error) {
-	return newServer(cfg, p, log, statsAddr, opts...)
+	s, err := newServer(cfg, p, log, statsAddr, opts...)
+	if err != nil {
+		return nil, err
+	}
+
+	s.run = stubNoFirewall // tests don't touch the host firewall unless they call SetServerRun
+
+	return s, nil
 }
+
+// stubNoFirewall makes every firewall probe fail, so openInboundUDP takes the fwNone path (no host I/O).
+func stubNoFirewall(context.Context, string, ...string) ([]byte, error) {
+	return nil, errors.New("no firewall in test")
+}
+
+// SetServerRun overrides the firewall command runner so a test can simulate a backend and record calls.
+func SetServerRun(s *Server, run runFunc) { s.run = run }
 
 func ServerServeAuthServer(s *Server, srv *http.Server, listener net.Listener) {
 	s.serveAuthServer(srv, listener)
 }
 
 func ServerTLSPin(s *Server) string { return s.tlsPin }
+
+func OpenInboundUDPForTest(ctx context.Context, run func(context.Context, string, ...string) ([]byte, error), port uint16, log zerolog.Logger) (string, error) {
+	return openInboundUDP(ctx, run, port, log)
+}
+
+func CloseInboundUDPForTest(ctx context.Context, run func(context.Context, string, ...string) ([]byte, error), backend string, port uint16, log zerolog.Logger) error {
+	return closeInboundUDP(ctx, run, backend, port, log)
+}

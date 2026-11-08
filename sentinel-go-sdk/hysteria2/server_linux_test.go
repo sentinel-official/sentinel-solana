@@ -451,3 +451,48 @@ func serverPlacementFixture(t *testing.T) service.Placement {
 
 	return service.Placement{Dir: t.TempDir(), Interface: "dvpn-n0", ToolDir: t.TempDir()}
 }
+
+func TestServer_Start_OpensFirewall_Stop_Closes(t *testing.T) {
+	t.Parallel()
+
+	statsSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("{}"))
+	}))
+	t.Cleanup(statsSrv.Close)
+
+	start := func(context.Context, service.Command, zerolog.Logger) (service.Process, error) {
+		return fakeProcess{}, nil
+	}
+
+	s, err := hysteria2.NewServerForTest(
+		hysteria2.DefaultServerConfig(), serverPlacementFixture(t), zerolog.Nop(), statsSrv.Listener.Addr().String(),
+		service.WithProcessStarter(start),
+	)
+	require.NoError(t, err)
+
+	var calls []string
+	hysteria2.SetServerRun(s, func(_ context.Context, name string, args ...string) ([]byte, error) {
+		calls = append(calls, name+" "+strings.Join(args, " "))
+		if name == "firewall-cmd" && len(args) == 1 && args[0] == "--state" {
+			return []byte("running\n"), nil // report firewalld active so Start picks the firewalld backend
+		}
+
+		return nil, nil
+	})
+
+	require.NoError(t, s.Start(t.Context()))
+	require.True(t, fwHasCallPrefix(calls, "firewall-cmd --add-port="), "Start must open the inbound udp port, calls=%v", calls)
+
+	require.NoError(t, s.Stop(context.Background()))
+	require.True(t, fwHasCallPrefix(calls, "firewall-cmd --remove-port="), "Stop must close the inbound udp port, calls=%v", calls)
+}
+
+func fwHasCallPrefix(calls []string, prefix string) bool {
+	for _, c := range calls {
+		if strings.HasPrefix(c, prefix) {
+			return true
+		}
+	}
+
+	return false
+}
