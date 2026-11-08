@@ -161,3 +161,8 @@ func ToSendResult(receipt *tx.Receipt) any {
 func WrapCallError(role, endpoint string, err error) error {
 	return wrapCallError(role, endpoint, err)
 }
+
+// BoundDial and PipeDialTimeout expose the capped endpoint dial.
+var BoundDial = boundDial
+
+const PipeDialTimeout = pipeDialTimeout

@@ -21,9 +21,9 @@ const (
 )
 
 func dialEndpoint(_ context.Context, endpoint string) (*grpc.ClientConn, error) {
-	dial := func(ctx context.Context, _ string) (net.Conn, error) {
+	dial := boundDial(pipeDialTimeout, func(ctx context.Context) (net.Conn, error) {
 		return winio.DialPipeAccess(ctx, endpoint, pipeClientRights)
-	}
+	})
 
 	conn, err := grpc.NewClient(
 		pipeTarget,
