@@ -303,7 +303,9 @@ func (r *Runtime) keepLeases(ctx context.Context) error {
 
 		var lease *Lease
 
-		err = r.db.WithContext(ctx).First(&stored, "node = ? AND status <> ?", probe.Node, StatusClosed).Error
+		// Only an open lease counts. A closing one winds down on its own (finalizeClosing); if it
+		// counted here, a node linked again during its close grace would get no lease for hours.
+		err = r.db.WithContext(ctx).First(&stored, "node = ? AND status = ?", probe.Node, StatusOpen).Error
 		if err == nil {
 			lease = &stored
 		} else if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {

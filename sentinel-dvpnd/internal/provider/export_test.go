@@ -106,3 +106,9 @@ func WatcherRunning(r *Runtime, address string) bool {
 
 	return r.watchers[address] != nil
 }
+
+func SyncChain(ctx context.Context, r *Runtime) error {
+	_, err := r.syncChain(ctx)
+
+	return err
+}
