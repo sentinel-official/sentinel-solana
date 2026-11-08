@@ -68,11 +68,14 @@ func TestLookPath_FindsOnPath(t *testing.T) {
 func TestLookPath_KeepsExplicitPaths(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
 
-	explicit := filepath.Join(t.TempDir(), "tool")
+	explicit := writeExecutable(t, t.TempDir(), binaryName("tool"))
 
 	got, err := service.LookPath(explicit)
 	require.NoError(t, err)
 	require.Equal(t, explicit, got)
+
+	_, err = service.LookPath(filepath.Join(t.TempDir(), "missing-tool"))
+	require.ErrorIs(t, err, service.ErrBinaryNotFound)
 }
 
 func TestLookPath_Missing(t *testing.T) {
@@ -88,6 +91,7 @@ func TestLookPath_RegisteredDirs(t *testing.T) {
 	driver := fakeClientDriver(1 << 25)
 	driver.LookupDirs = func() []string { return []string{dir} }
 	service.RegisterClient(service.Name("fake-dirs"), driver)
+	t.Cleanup(func() { service.DeregisterForTest(service.Name("fake-dirs")) })
 
 	path := writeExecutable(t, dir, binaryName("fakebin"))
 	t.Setenv("PATH", t.TempDir())

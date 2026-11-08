@@ -5,9 +5,10 @@ import (
 	"context"
 	"fmt"
 	"net/netip"
-	"os/exec"
 	"strings"
 	"text/template"
+
+	"github.com/sentinel-official/sentinel-go-sdk/v3/service"
 )
 
 const nftRulesetSource = `table inet {{ .Table }}
@@ -46,7 +47,7 @@ func (f nftFirewall) Apply(
 ) error {
 	rules := RenderNftRuleset(f.table, iface, nodeAddrs, rpcAndWSAddrs, allowLAN)
 
-	cmd := exec.CommandContext(ctx, "nft", "-f", "-")
+	cmd := service.CommandContext(ctx, "nft", "-f", "-")
 	cmd.Stdin = strings.NewReader(rules)
 
 	if output, err := cmd.CombinedOutput(); err != nil {
@@ -57,7 +58,7 @@ func (f nftFirewall) Apply(
 }
 
 func (f nftFirewall) Flush(ctx context.Context) error {
-	cmd := exec.CommandContext(ctx, "nft", "delete", "table", "inet", f.table)
+	cmd := service.CommandContext(ctx, "nft", "delete", "table", "inet", f.table)
 
 	if output, err := cmd.CombinedOutput(); err != nil && !strings.Contains(string(output), "No such file") {
 		return fmt.Errorf("flushing firewall: %w: %s", err, output)
@@ -67,7 +68,7 @@ func (f nftFirewall) Flush(ctx context.Context) error {
 }
 
 func KillSwitchLoaded(ctx context.Context, name string) (bool, error) {
-	output, err := exec.CommandContext(ctx, "nft", "list", "table", "inet", name).CombinedOutput()
+	output, err := service.CommandContext(ctx, "nft", "list", "table", "inet", name).CombinedOutput()
 
 	return parseLoaded(output, err)
 }

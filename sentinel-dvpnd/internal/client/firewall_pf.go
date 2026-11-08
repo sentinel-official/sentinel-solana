@@ -9,7 +9,6 @@ import (
 	"io/fs"
 	"net/netip"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -497,7 +496,7 @@ func runPFCommand(ctx context.Context, input, name string, args ...string) ([]by
 		return nil, err
 	}
 
-	cmd := exec.CommandContext(ctx, path, args...)
+	cmd := service.CommandContext(ctx, path, args...)
 	cmd.Stdin = strings.NewReader(input)
 
 	var diagnostics bytes.Buffer

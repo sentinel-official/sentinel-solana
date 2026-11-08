@@ -35,6 +35,9 @@ type processIdentity struct {
 	binary     string
 	conf       string
 	configFlag string
+	// launched is the image the process was seen running after it started, read from the PID file.
+	// A wrapper script execs into another binary, so binary alone would not recognise it.
+	launched string
 }
 
 func KillPIDFile(ctx context.Context, path, binary, configFlag, conf string) error {
@@ -60,15 +63,45 @@ func RemovePIDFile(path string) error {
 }
 
 func WritePIDFile(path string, pid int) error {
+	return writePIDRecord(path, pid, "")
+}
+
+// writePIDRecord writes the PID and, when known, the executable the process runs on a second line.
+func writePIDRecord(path string, pid int, executable string) error {
 	if pid <= 1 {
 		return fmt.Errorf("%w: PID %d", validate.ErrInvalidConfig, pid)
 	}
 
-	if err := os.WriteFile(path, []byte(strconv.Itoa(pid)+"\n"), 0o600); err != nil {
+	if strings.ContainsAny(executable, "\r\n") || (executable != "" && !filepath.IsAbs(executable)) {
+		return fmt.Errorf("%w: executable %q", validate.ErrInvalidConfig, executable)
+	}
+
+	content := strconv.Itoa(pid) + "\n"
+	if executable != "" {
+		content += executable + "\n"
+	}
+
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		return fmt.Errorf("writing PID file %s: %w", path, err)
 	}
 
 	return nil
+}
+
+func parsePIDRecord(raw []byte) (int, string, error) {
+	first, rest, _ := strings.Cut(string(raw), "\n")
+
+	pid, err := strconv.Atoi(strings.TrimSpace(first))
+	if err != nil {
+		return 0, "", fmt.Errorf("parsing PID: %w", err)
+	}
+
+	executable := strings.TrimSpace(rest)
+	if executable != "" && !filepath.IsAbs(executable) {
+		executable = ""
+	}
+
+	return pid, executable, nil
 }
 
 func killImagePID(ctx context.Context, path string, pid int, binary string) error {
@@ -108,10 +141,12 @@ func killPIDFile(ctx context.Context, path string, identity processIdentity, goo
 		}
 	}()
 
-	pid, err := strconv.Atoi(strings.TrimSpace(string(raw)))
+	pid, launched, err := parsePIDRecord(raw)
 	if err != nil || pid <= 1 || pid == os.Getpid() {
 		return nil
 	}
+
+	identity.launched = launched
 
 	if identity.binary == "" || identity.configFlag == "" || identity.conf == "" {
 		remove = false
@@ -167,7 +202,12 @@ func killPIDFile(ctx context.Context, path string, identity processIdentity, goo
 }
 
 func matchesCommand(args []string, identity processIdentity) bool {
-	if len(args) < 3 || filepath.Base(args[0]) != filepath.Base(identity.binary) {
+	if len(args) < 3 {
+		return false
+	}
+
+	name := filepath.Base(args[0])
+	if name != filepath.Base(identity.binary) && (identity.launched == "" || name != filepath.Base(identity.launched)) {
 		return false
 	}
 
@@ -185,7 +225,7 @@ func ownsImage(image, binary string, started, written time.Time) bool {
 		return false
 	}
 
-	path, err := LookPath(binary)
+	path, err := resolveForMatch(binary)
 
 	return err == nil && strings.EqualFold(filepath.Clean(image), filepath.Clean(path))
 }
@@ -208,7 +248,11 @@ func ownsPID(ctx context.Context, pid int, identity processIdentity) (bool, erro
 		return false, nil
 	}
 
-	path, err := LookPath(identity.binary)
+	if identity.launched != "" && executable == identity.launched {
+		return true, nil
+	}
+
+	path, err := resolveForMatch(identity.binary)
 	if err != nil {
 		return false, fmt.Errorf("resolving managed executable: %w", err)
 	}

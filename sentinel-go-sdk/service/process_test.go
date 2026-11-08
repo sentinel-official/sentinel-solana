@@ -306,7 +306,34 @@ func TestProcessManager_Launch_WritesPIDFile(t *testing.T) {
 
 	data, err := os.ReadFile(service.PIDPath(dir, "bin"))
 	require.NoError(t, err)
-	require.Equal(t, strconv.Itoa(child.pid), strings.TrimSpace(string(data)))
+
+	first, _, _ := strings.Cut(string(data), "\n")
+	require.Equal(t, strconv.Itoa(child.pid), first)
+}
+
+func TestProcessManager_Launch_RecordsExecutable(t *testing.T) {
+	t.Parallel()
+
+	if runtime.GOOS != "linux" {
+		t.Skip("reads /proc")
+	}
+
+	dir := t.TempDir()
+	pm := service.NewProcessManager("sh", dir, zerolog.Nop())
+	require.NoError(t, pm.Launch(t.Context(), service.Command{Path: "sh", Args: []string{"-c", "sleep 30"}},
+		func(context.Context) error { return nil }))
+
+	t.Cleanup(func() { _ = pm.Terminate(context.WithoutCancel(t.Context())) })
+
+	data, err := os.ReadFile(service.PIDPath(dir, "sh"))
+	require.NoError(t, err)
+
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	require.Len(t, lines, 2)
+
+	exe, err := os.Readlink("/proc/" + lines[0] + "/exe")
+	require.NoError(t, err)
+	require.Equal(t, exe, lines[1])
 }
 
 func TestProcessManager_Terminate_KeepsPIDFileOnFailure(t *testing.T) {

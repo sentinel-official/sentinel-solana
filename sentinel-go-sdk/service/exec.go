@@ -30,22 +30,77 @@ type Command struct {
 	Unset []string
 }
 
+// LookPath resolves a tool to the absolute path of an executable that only trusted accounts can
+// replace (see trustedExecutable). A bare name is searched in PATH, the platform's usual install
+// folders and the folders protocol drivers register. A copy that fails the check is skipped, and
+// when only such copies exist the error names the first one. An explicit path must be absolute
+// and pass the check itself.
 func LookPath(name string) (string, error) {
-	if filepath.Base(name) != name {
-		return name, nil
-	}
+	candidates := []string{name}
 
-	if path, err := exec.LookPath(name); err == nil {
-		return path, nil
-	}
-
-	for _, dir := range slices.Concat(knownBinaryDirs(runtime.GOOS), registeredDirs()) {
-		if path, err := exec.LookPath(filepath.Join(dir, name)); err == nil {
-			return path, nil
+	if filepath.Base(name) == name {
+		candidates = candidates[:0]
+		for _, dir := range searchDirs(runtime.GOOS) {
+			candidates = append(candidates, filepath.Join(dir, name))
 		}
 	}
 
+	var untrusted error
+
+	for _, candidate := range candidates {
+		path, err := exec.LookPath(candidate)
+		if err != nil {
+			continue
+		}
+
+		if err := trustedExecutable(path); err != nil {
+			if untrusted == nil {
+				untrusted = err
+			}
+
+			continue
+		}
+
+		return path, nil
+	}
+
+	if untrusted != nil {
+		return "", untrusted
+	}
+
 	return "", fmt.Errorf("%w: %s", ErrBinaryNotFound, name)
+}
+
+// resolveForMatch resolves a tool the way the daemon runs it, to recognise processes it started.
+// It never runs anything, so an explicit path that does not pass LookPath (missing now, or
+// refused) is kept as written and can still match a process an earlier run left behind.
+func resolveForMatch(name string) (string, error) {
+	path, err := LookPath(name)
+	if err == nil || filepath.Base(name) == name {
+		return path, err
+	}
+
+	return name, nil
+}
+
+// CommandContext is exec.CommandContext for a tool the daemon starts: name resolves through
+// LookPath, and the child gets a PATH of trusted folders only. When name does not resolve, the
+// returned command fails to start with the lookup error.
+func CommandContext(ctx context.Context, name string, args ...string) *exec.Cmd {
+	path, err := LookPath(name)
+	if err != nil {
+		// Keep the name for error messages; Start returns cmd.Err before anything runs.
+		path = name
+	}
+
+	cmd := exec.CommandContext(ctx, path, args...)
+	if err != nil {
+		cmd.Err = err
+	}
+
+	cmd.Env = toolEnv(nil, nil)
+
+	return cmd
 }
 
 func PollReady(ctx context.Context, probe func(context.Context) error) error {
@@ -105,18 +160,21 @@ func knownBinaryDirs(goos string) []string {
 }
 
 func newCmd(ctx context.Context, command Command) *exec.Cmd {
-	path := command.Path
-	if resolved, err := LookPath(command.Path); err == nil {
-		path = resolved
-	}
-
-	cmd := exec.CommandContext(ctx, path, command.Args...)
+	cmd := CommandContext(ctx, command.Path, command.Args...)
 	cmd.Dir = command.Dir
-	cmd.Env = append(environWithout(os.Environ(), command.Unset, runtime.GOOS), command.Env...)
+	cmd.Env = toolEnv(command.Unset, command.Env)
 	cmd.Stdin = command.Stdin
 	configure(cmd)
 
 	return cmd
+}
+
+// toolEnv is this process's environment without the unset names, with PATH replaced by the
+// trusted folders, then the extra entries (which may set PATH again on purpose).
+func toolEnv(unset, extra []string) []string {
+	env := environWithout(os.Environ(), append(slices.Clone(unset), "PATH"), runtime.GOOS)
+
+	return append(append(env, "PATH="+trustedPathEnv(runtime.GOOS)), extra...)
 }
 
 func pollUntilReady(

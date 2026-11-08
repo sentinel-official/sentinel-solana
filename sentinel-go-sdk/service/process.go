@@ -83,10 +83,28 @@ func (p *ProcessManager) Launch(ctx context.Context, command Command, probe func
 		return p.abort(ctx, process, "stopping after failed start: %w", err)
 	}
 
+	p.recordExecutable(ctx, process.PID())
+
 	p.launchDone = ctx.Done()
 	p.process = process
 
 	return nil
+}
+
+// recordExecutable adds the image the ready process runs to its PID file. A wrapper script for the
+// binary execs into another file, and without this record a later start would not recognise a copy
+// left running by a daemon that was killed, so it would never stop it.
+func (p *ProcessManager) recordExecutable(ctx context.Context, pid int) {
+	executable, _, err := readProcessArgs(ctx, pid)
+	if err != nil {
+		p.log.Debug().Err(err).Int("pid", pid).Msg("reading launched executable")
+
+		return
+	}
+
+	if err := writePIDRecord(PIDPath(p.dir, p.binary), pid, executable); err != nil {
+		p.log.Warn().Err(err).Int("pid", pid).Msg("recording launched executable")
+	}
 }
 
 func (p *ProcessManager) Started() bool {

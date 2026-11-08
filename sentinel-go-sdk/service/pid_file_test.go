@@ -376,3 +376,119 @@ func TestWritePIDFile_WritesProcessPID(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, strconv.Itoa(process.PID())+"\n", string(raw))
 }
+
+// startWrapped starts a process the way a wrapper script leaves it: argv[0] and the executable are
+// a file whose name is not the managed binary's.
+func startWrapped(t *testing.T, marker string) (*exec.Cmd, string, chan struct{}) {
+	t.Helper()
+
+	sh, err := exec.LookPath("sh")
+	require.NoError(t, err)
+	real, err := filepath.EvalSymlinks(sh)
+	require.NoError(t, err)
+
+	command := "trap 'kill \"$child\"' TERM; sleep 30 & child=$!; echo ready; wait \"$child\""
+	cmd := exec.CommandContext(t.Context(), real, "-c", command, "fixture", "--config", marker)
+	ready, err := cmd.StdoutPipe()
+	require.NoError(t, err)
+	require.NoError(t, cmd.Start())
+
+	line, err := bufio.NewReader(ready).ReadString('\n')
+	require.NoError(t, err)
+	require.Equal(t, "ready\n", line)
+
+	done := make(chan struct{})
+
+	go func() {
+		_ = cmd.Wait()
+
+		close(done)
+	}()
+
+	t.Cleanup(func() {
+		_ = cmd.Process.Kill()
+
+		<-done
+	})
+
+	return cmd, real, done
+}
+
+func TestKillPIDFile_KillsProcessBehindWrapper(t *testing.T) {
+	t.Parallel()
+
+	if runtime.GOOS != "linux" {
+		t.Skip("reads /proc")
+	}
+
+	marker := "sentinel-wrapper-test-" + filepath.Base(t.TempDir())
+	cmd, real, done := startWrapped(t, marker)
+
+	path := filepath.Join(t.TempDir(), "openvpn.pid")
+
+	// Without a record of what it runs, the process does not look like the managed binary.
+	require.NoError(t, service.WritePIDFile(path, cmd.Process.Pid))
+	require.NoError(t, service.KillPIDFile(t.Context(), path, "sentinel-wrapper-probe", "--config", marker))
+
+	select {
+	case <-done:
+		t.Fatal("process killed without a recorded executable")
+	default:
+	}
+
+	// A record naming another file of the same name is not enough either.
+	require.NoError(t, service.WritePIDRecord(path, cmd.Process.Pid, filepath.Join(t.TempDir(), filepath.Base(real))))
+	require.ErrorContains(t, service.KillPIDFile(t.Context(), path, "sentinel-wrapper-probe", "--config", marker),
+		"resolving managed executable")
+
+	select {
+	case <-done:
+		t.Fatal("process killed under a foreign executable record")
+	default:
+	}
+
+	require.NoError(t, service.WritePIDRecord(path, cmd.Process.Pid, real))
+
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	defer cancel()
+
+	require.NoError(t, service.KillPIDFile(ctx, path, "sentinel-wrapper-probe", "--config", marker))
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("recorded process did not exit")
+	}
+
+	require.NoFileExists(t, path)
+}
+
+func TestKillPIDFile_RecordNeedsMatchingConfig(t *testing.T) {
+	t.Parallel()
+
+	if runtime.GOOS != "linux" {
+		t.Skip("reads /proc")
+	}
+
+	marker := "sentinel-wrapper-test-" + filepath.Base(t.TempDir())
+	cmd, real, done := startWrapped(t, marker)
+
+	path := filepath.Join(t.TempDir(), "openvpn.pid")
+	require.NoError(t, service.WritePIDRecord(path, cmd.Process.Pid, real))
+	require.NoError(t, service.KillPIDFile(t.Context(), path, "sentinel-wrapper-probe", "--config", marker+"-other"))
+
+	select {
+	case <-done:
+		t.Fatal("process killed for another config")
+	default:
+	}
+}
+
+func TestWritePIDRecord_RejectsUnsafeExecutable(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "x.pid")
+	for _, exe := range []string{"relative/bin", "/bin/a\n/bin/b"} {
+		require.ErrorIs(t, service.WritePIDRecord(path, 4242, exe), validate.ErrInvalidConfig, exe)
+	}
+}
