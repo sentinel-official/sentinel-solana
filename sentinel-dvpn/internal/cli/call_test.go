@@ -1,6 +1,7 @@
 package cli_test
 
 import (
+	"bytes"
 	"context"
 	"testing"
 	"time"
@@ -241,9 +242,14 @@ func TestWrapCallError(t *testing.T) {
 			want: "node role is not served: rpc error: code = Unimplemented desc = method X not implemented",
 		},
 		{
-			err:  status.Error(codes.Unavailable, "connection refused"),
-			name: "unavailable",
-			want: "calling daemon at /tmp/daemon.sock: rpc error: code = Unavailable desc = connection refused",
+			err:  status.Error(codes.Unavailable, `connection error: desc = "transport: Error while dialing: dial unix /tmp/daemon.sock: connect: no such file or directory"`),
+			name: "unavailable_transport",
+			want: "the node service (instance c0) isn't running: start it with `sentinel-dvpnd service start --instance c0` (or run `sentinel-dvpnd run --instance c0` in a terminal) (/tmp/daemon.sock)",
+		},
+		{
+			err:  status.Error(codes.Unavailable, "unavailable: the kill switch and sessions a previous run left are still being recovered"),
+			name: "unavailable_recovery",
+			want: "the node daemon (instance c0) is not ready (starting up or stopping); try again (/tmp/daemon.sock): rpc error: code = Unavailable desc = unavailable: the kill switch and sessions a previous run left are still being recovered",
 		},
 		{
 			err:  status.Error(codes.Internal, "boom"),
@@ -256,8 +262,28 @@ func TestWrapCallError(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			got := cli.WrapCallError("node", "/tmp/daemon.sock", tc.err)
+			got := cli.WrapCallError("node", instance.Tag("c0"), "/tmp/daemon.sock", tc.err)
 			require.EqualError(t, got, tc.want)
+			require.Equal(t, status.Code(tc.err), status.Code(got), "the gRPC code stays readable through the wrap")
 		})
 	}
+}
+
+// A command run while its daemon is stopped printed the plain "isn't running" line followed by the raw
+// gRPC dial error. The line is now plain words only; the raw error is logged at debug.
+func TestDialer_CallError_PlainWordsAndTheRawErrorAtDebug(t *testing.T) {
+	t.Parallel()
+
+	raw := status.Error(codes.Unavailable,
+		`connection error: desc = "transport: Error while dialing: dial unix /tmp/daemon.sock: connect: connection refused"`)
+
+	var logged bytes.Buffer
+
+	got := cli.CallError(&logged, "/tmp/daemon.sock", "client", instance.Tag("c0"), raw)
+
+	require.EqualError(t, got, "the client service (instance c0) isn't running: start it with "+
+		"`sentinel-dvpnd service start --instance c0` (or run `sentinel-dvpnd run --instance c0` in a terminal) (/tmp/daemon.sock)")
+	require.NotContains(t, got.Error(), "rpc error")
+	require.ErrorIs(t, got, raw, "the raw error stays in the chain")
+	require.Contains(t, logged.String(), "connection refused", "the raw error is in the debug log")
 }

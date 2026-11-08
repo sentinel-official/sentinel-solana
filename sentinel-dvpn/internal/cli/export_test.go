@@ -3,7 +3,9 @@ package cli
 import (
 	"context"
 	"fmt"
+	"io"
 
+	"github.com/rs/zerolog"
 	"github.com/solana-foundation/solana-go/v2"
 	"github.com/solana-foundation/solana-go/v2/rpc"
 	"github.com/spf13/cobra"
@@ -158,6 +160,13 @@ func ToSendResult(receipt *tx.Receipt) any {
 	return toSendResult(receipt)
 }
 
-func WrapCallError(role, endpoint string, err error) error {
-	return wrapCallError(role, endpoint, err)
+func WrapCallError(role string, tag instance.Tag, endpoint string, err error) error {
+	return wrapCallError(role, tag, endpoint, err)
+}
+
+// CallError runs a dialer's callError with a debug logger writing to w.
+func CallError(w io.Writer, endpoint, role string, tag instance.Tag, err error) error {
+	d := &dialer{endpoint: endpoint, log: zerolog.New(w).Level(zerolog.DebugLevel)}
+
+	return d.callError(role, tag, err)
 }

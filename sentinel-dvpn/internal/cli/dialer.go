@@ -7,6 +7,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/rs/zerolog"
 	"google.golang.org/grpc"
 
 	"github.com/sentinel-official/sentinel-go-sdk/v3/daemon/instance"
@@ -19,7 +20,17 @@ const (
 
 type dialer struct {
 	endpoint  string
+	log       zerolog.Logger
 	stateRoot string
+}
+
+// callError shapes a failed daemon call for the user. The raw gRPC error goes to the debug log
+// (--log.level debug), so the message itself can stay in plain words.
+func (d *dialer) callError(role string, tag instance.Tag, err error) error {
+	endpoint := d.endpointFor(tag)
+	d.log.Debug().Err(err).Str("endpoint", endpoint).Str("instance", string(tag)).Msg("daemon call failed")
+
+	return wrapCallError(role, tag, endpoint, err)
 }
 
 func (d *dialer) Dial(ctx context.Context, tag instance.Tag) (*grpc.ClientConn, error) {
