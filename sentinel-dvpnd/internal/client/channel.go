@@ -10,6 +10,8 @@ import (
 	"github.com/solana-foundation/solana-go/v2"
 	"gorm.io/gorm"
 
+	"github.com/sentinel-official/sentinel-dvpnd/internal/preflight"
+
 	"github.com/sentinel-official/sentinel-go-sdk/v3/api"
 	daemonv1 "github.com/sentinel-official/sentinel-go-sdk/v3/daemon/v1"
 	"github.com/sentinel-official/sentinel-go-sdk/v3/nodeapi"
@@ -271,6 +273,8 @@ func (r *Runtime) openChannel(
 	}
 
 	if _, err := r.sender.Send(ctx, r.privateKey, []solana.Instruction{ix}, tx.WithLabel("open_channel")); err != nil {
+		err = r.explainOpenFailure(ctx, err, escrow)
+
 		if isDefinitiveOpenFailure(err) {
 			cleanupCtx, cancel := r.withDetachedTimeout(ctx)
 			defer cancel()
@@ -513,4 +517,24 @@ func isDefinitiveOpenFailure(err error) bool {
 	failed, ok := errors.AsType[*tx.FailedOnChainError](err)
 
 	return ok && !failed.PriorIndeterminate
+}
+
+// explainOpenFailure adds the fix to a Token-2022 refusal of open_channel. The program moves the
+// escrow as the owner's delegate, so a missing or used-up approval fails exactly like an empty wallet
+// ("insufficient funds"), and a revoked one as "owner does not match" (the config is no longer the
+// delegate); the raw error named neither.
+func (r *Runtime) explainOpenFailure(ctx context.Context, err error, escrow uint64) error {
+	txErr, ok := errors.AsType[*core.TxError](err)
+	if !ok || txErr.Program != "token-2022" || (txErr.Name != "InsufficientFunds" && txErr.Name != "OwnerMismatch") {
+		return err
+	}
+
+	readCtx, cancel := r.withDetachedTimeout(ctx)
+	defer cancel()
+
+	if problem := preflight.DelegateProblem(readCtx, r.programClient, r.owner); problem != "" {
+		return fmt.Errorf("%w: the %s; %s with the client owner key", err, problem, preflight.ApproveDelegateRemedy)
+	}
+
+	return fmt.Errorf("%w: the delegate is approved, so the wallet balance or allowance is below the escrow of %d base units", err, escrow)
 }

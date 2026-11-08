@@ -212,6 +212,7 @@ func checkRole(ctx context.Context, loaded *config.Loaded, programClient *progra
 		checks = append(checks, newCheck("api_port", checkPortFree(ctx, loaded.Node.API.Port)))
 	case config.RoleClient:
 		checks = append(checks, newCheck("privileges", checkPrivileges()))
+		checks = append(checks, checkDelegate(ctx, loaded, programClient))
 		checks = append(checks, newCheck("dns_backend", checkDNSBackend(loaded.Client.Network.DNSBackend)))
 
 		if loaded.Client.Network.KillSwitch != config.KillSwitchOff {
