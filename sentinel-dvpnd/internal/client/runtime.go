@@ -48,6 +48,7 @@ type Runtime struct {
 	lookup                 func(context.Context, string, string) ([]netip.Addr, error)
 	metrics                metrics
 	mu                     sync.Mutex
+	networkUp              chan struct{} // wakes a redial waiting for the network (NetworkAvailable)
 	nodeHosts              nodeHosts
 	owner                  solana.PublicKey
 	peerCfg                cli.PeerConfig
@@ -208,6 +209,7 @@ func New(
 		pollInterval:           pollInterval,
 		privateKey:             privateKey,
 		programClient:          programClient,
+		networkUp:              make(chan struct{}, 1),
 		reconnectAttempts:      reconnectAttempts,
 		reconnectBackoff:       reconnectBackoff,
 		remover:                leftover.NewRemover(),
@@ -237,4 +239,14 @@ func runCommand(ctx context.Context, input, name string, args ...string) ([]byte
 	}
 
 	return output, nil
+}
+
+// NetworkAvailable tells a redial that waits for the network that it is back, so it tries now
+// instead of at its next poll. For platforms that hear it (Android's ConnectivityManager); safe to
+// call any time, from any goroutine.
+func (r *Runtime) NetworkAvailable() {
+	select {
+	case r.networkUp <- struct{}{}:
+	default:
+	}
 }

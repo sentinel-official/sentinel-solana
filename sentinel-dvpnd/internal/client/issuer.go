@@ -238,22 +238,35 @@ func (r *Runtime) reconnect(
 
 	r.teardown(ctx, conn, reasonConnectionLost)
 
-	backoff := r.reconnectBackoff
-	for attempt := uint(1); attempt <= r.reconnectAttempts; attempt++ {
-		select {
-		case <-ctx.Done():
-			return nil, false
-		case <-time.After(backoff):
-		}
+	var next *connection
 
-		r.log.Info().Uint("attempt", attempt).Msg("reconnecting")
+	redialed := newRedialPolicy(r.reconnectAttempts, r.reconnectBackoff).run(ctx, r.networkUp,
+		func(attempt uint, waitingForNetwork bool) error {
+			if waitingForNetwork {
+				r.log.Info().Uint("attempt", attempt).Msg("reconnecting (the network was gone)")
+			} else {
+				r.log.Info().Uint("attempt", attempt).Msg("reconnecting")
+			}
 
-		next, err := r.connect(ctx, ctx, req, false, placeholder)
-		if err == nil {
-			return next, true
-		}
+			c, err := r.connect(ctx, ctx, req, false, placeholder)
+			if err != nil {
+				if networkDown(err) {
+					r.log.Warn().Err(err).Msg("no network; waiting for it before using the next attempt")
+				}
 
-		backoff *= 2
+				return err
+			}
+
+			next = c
+
+			return nil
+		})
+	if redialed {
+		return next, true
+	}
+
+	if ctx.Err() != nil {
+		return nil, false
 	}
 
 	r.mu.Lock()
