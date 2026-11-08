@@ -435,3 +435,31 @@ func serverPlacementFixture(t *testing.T) service.Placement {
 		ToolDir:   t.TempDir(),
 	}
 }
+
+func TestServer_LeftoverPeerStats_ReadsBeforeStart(t *testing.T) {
+	t.Parallel()
+
+	setup := func(context.Context, string, string, string, []netip.Prefix) (service.Egress, error) {
+		return &sdktest.FakeEgress{}, nil
+	}
+
+	runner := &fakeRunner{transfer: map[string]service.PeerStats{"peer-a": {RxBytes: 7, TxBytes: 9}}}
+	placement := serverPlacementFixture(t)
+
+	s, err := wgcore.NewServerForTest(
+		plainVariantFixture(), serverConfigFixture(t, plainExtensions{}), placement, zerolog.Nop(), runner, setup,
+	)
+	require.NoError(t, err)
+
+	stats, err := s.LeftoverPeerStats(t.Context())
+	require.NoError(t, err)
+	require.Equal(t, map[service.PeerID]service.PeerStats{"peer-a": {RxBytes: 7, TxBytes: 9}}, stats)
+	require.Equal(t, []string{placement.Interface}, runner.queried)
+
+	var _ service.LeftoverStatsReader = s
+
+	runner.transferErr = errors.New("no such device")
+
+	_, err = s.LeftoverPeerStats(t.Context())
+	require.ErrorContains(t, err, "no such device")
+}

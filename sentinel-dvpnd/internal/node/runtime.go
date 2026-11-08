@@ -246,6 +246,8 @@ func (r *Runtime) chainState() (dvpn.Config, dvpn.Node) {
 }
 
 func (r *Runtime) clearLeftovers(ctx context.Context) error {
+	r.foldLeftoverUsage(ctx)
+
 	var (
 		dirs []string
 		errs []error

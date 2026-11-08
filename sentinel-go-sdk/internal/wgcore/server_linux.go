@@ -173,6 +173,22 @@ func (s *Server[E]) PeerStats(ctx context.Context, id service.PeerID) (service.P
 	return transfer[string(id)], nil
 }
 
+// LeftoverPeerStats reads the peer counters of an interface a previous run left behind. It works
+// before Start, and fails when there is no such interface.
+func (s *Server[E]) LeftoverPeerStats(ctx context.Context) (map[service.PeerID]service.PeerStats, error) {
+	transfer, err := s.runner.Transfer(ctx, s.placement.Interface)
+	if err != nil {
+		return nil, fmt.Errorf("reading leftover %s counters: %w", s.placement.Interface, err)
+	}
+
+	stats := make(map[service.PeerID]service.PeerStats, len(transfer))
+	for id, peer := range transfer {
+		stats[service.PeerID(id)] = peer
+	}
+
+	return stats, nil
+}
+
 func (s *Server[E]) RemovePeer(ctx context.Context, id service.PeerID) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

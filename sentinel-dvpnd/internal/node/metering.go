@@ -266,6 +266,71 @@ func (r *Runtime) updateMeter(ctx context.Context, subject string, paid uint64) 
 	}
 }
 
+// foldLeftoverUsage meters what active sessions used while the daemon was down. A kernel WireGuard
+// peer keeps forwarding after the process dies, so its counters are read here, before
+// clearLeftovers removes the old interface, and folded into each session as an ordinary sync
+// would. The replacement interface starts its counters at zero, so the stored counters are reset to
+// match.
+func (r *Runtime) foldLeftoverUsage(ctx context.Context) {
+	reader, ok := r.service.(service.LeftoverStatsReader)
+	if !ok {
+		return
+	}
+
+	stats, err := reader.LeftoverPeerStats(ctx)
+	if err != nil {
+		r.log.Debug().Err(err).Msg("no leftover peer counters to meter")
+
+		return
+	}
+
+	var sessions []Session
+	if err := r.db.WithContext(ctx).Where("status = ?", SessionStatusActive).Find(&sessions).Error; err != nil {
+		r.log.Warn().Err(err).Msg("loading active sessions to meter leftover traffic")
+
+		return
+	}
+
+	now := time.Now().Unix()
+
+	for i := range sessions {
+		sess := &sessions[i]
+
+		peer, ok := stats[service.PeerID(sess.PeerID)]
+		if !ok {
+			continue
+		}
+
+		rxDelta, txDelta := foldStats(sess, peer, now)
+
+		updates := map[string]any{
+			"last_traffic_unix": sess.LastTrafficUnix,
+			"rx_bytes":          sess.RxBytes,
+			"rx_counter":        uint64(0),
+			"tx_bytes":          sess.TxBytes,
+			"tx_counter":        uint64(0),
+			"updated_unix":      now,
+		}
+		if err := r.db.WithContext(ctx).Model(&Session{}).
+			Where("id = ? AND status = ?", sess.ID, SessionStatusActive).Updates(updates).Error; err != nil {
+			r.log.Warn().Err(err).Str("session", sess.ID).Msg("saving leftover traffic")
+
+			continue
+		}
+
+		if sess.Credential == CredentialTicket && rxDelta+txDelta > 0 {
+			delta := gorm.Expr("consumed_bytes + ?", rxDelta+txDelta)
+			if err := r.db.WithContext(ctx).Model(&Ticket{}).
+				Where("hash = ?", sess.Subject).Update("consumed_bytes", delta).Error; err != nil {
+				r.log.Warn().Err(err).Str("ticket", sess.Subject).Msg("updating ticket consumption")
+			}
+		}
+
+		r.log.Info().Str("session", sess.ID).Uint64("rx_bytes", rxDelta).Uint64("tx_bytes", txDelta).
+			Msg("metered traffic carried while the daemon was down")
+	}
+}
+
 func counterDelta(current, previous uint64) uint64 {
 	if current < previous {
 		return current

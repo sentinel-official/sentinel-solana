@@ -161,6 +161,14 @@ type PeerRestorer interface {
 	RestorePeer(ctx context.Context, req PeerRequest, resp PeerResponse) error
 }
 
+// LeftoverStatsReader is a server whose peers can outlive the daemon: a kernel WireGuard interface
+// keeps forwarding traffic after the process dies. LeftoverPeerStats reads the counters of the
+// interface a previous run left behind, before Start replaces it, so that traffic can still be
+// metered.
+type LeftoverStatsReader interface {
+	LeftoverPeerStats(ctx context.Context) (map[PeerID]PeerStats, error)
+}
+
 type PeerStats struct {
 	RxBytes   uint64 `json:"rx_bytes"`
 	TxBytes   uint64 `json:"tx_bytes"`
