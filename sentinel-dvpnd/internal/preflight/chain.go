@@ -82,11 +82,8 @@ func checkGrant(
 				allowance = 0
 			}
 
-			return fmt.Errorf(
-				"%s holds no grant from %s covering permissions %#x; run sentinel-dvpn grant open-grant "+
-					"--key <owner> --grantee %s --target %s --permissions %d --expires-at 0 --allowance %d: %w",
-				signer, ownerKey, permissions, signer, solana.PublicKey{}, permissions, allowance, err,
-			)
+			return fmt.Errorf("%s holds no grant from %s covering permissions %#x; run %s: %w",
+				signer, ownerKey, permissions, grantHint(signer, permissions, allowance), err)
 		}
 
 		return err
@@ -152,4 +149,11 @@ func loadSigner(loaded *config.Loaded) (solana.PublicKey, error) {
 	}
 
 	return privateKey.PublicKey(), nil
+}
+
+// grantHint is the command that gives signer the grant it lacks. The owner signs it, so the key is
+// selected with sentinel-dvpn's --key.name flag (the CLI has no --key).
+func grantHint(signer solana.PublicKey, permissions, allowance uint64) string {
+	return fmt.Sprintf("sentinel-dvpn grant open-grant --key.name <owner> --grantee %s --target %s "+
+		"--permissions %d --expires-at 0 --allowance %d", signer, solana.PublicKey{}, permissions, allowance)
 }
