@@ -353,3 +353,56 @@ func TestRuntime_StartSession_IncompleteFirewallRowFails(t *testing.T) {
 	require.ErrorIs(t, err, client.ErrFirewallRowIncomplete)
 	require.Empty(t, firewall.applies())
 }
+
+func TestRuntime_Recover_CopyRemovalBestEffortLiveCleanupFatal(t *testing.T) {
+	t.Parallel()
+
+	setup := func(t *testing.T) *client.Runtime {
+		t.Helper()
+
+		fakeRPC := sdktest.NewFakeRPC(t)
+		home := testutil.NewClientHome(t, fakeRPC)
+		rt := newRuntime(t, home, home.ProgramClient)
+		client.SetInterfaceRemover(rt, &testutil.RecordingInterfaceRemover{})
+		client.SetDNSBackend(rt, &recordingDNSBackend{})
+		client.SetFirewallBackend(rt, &recordingFirewallBackend{})
+		registerFakeClientOnce()
+
+		return rt
+	}
+
+	t.Run("leftover copy removal failure is not fatal", func(t *testing.T) {
+		t.Parallel()
+
+		rt := setup(t)
+		// The service's own (live) cleanup succeeds; only removing a stale tool-dir file copy fails,
+		// as a non-root run hits on a root-owned copy from a prior privileged run. That copy is an old
+		// artifact, not a live leak, so recovery must still succeed.
+		cleanup := func(string) {}
+		client.SetService(rt, sdktest.FakeName, fakeClientConfig{
+			hooks: clientHooks{onCleanup: &cleanup},
+			state: sdktest.NewFakeState(sdktest.FakeName),
+		})
+		client.SetRemoveCopies(rt, func([]string, string) error { return errors.New("permission denied") })
+
+		require.NoError(t, rt.Recover(t.Context()))
+		require.True(t, client.Recovered(rt))
+	})
+
+	t.Run("live service cleanup failure stays fatal", func(t *testing.T) {
+		t.Parallel()
+
+		rt := setup(t)
+		// A failure to tear down the previous run's live state (stale tunnel process / interface /
+		// adapter) must abort start, or the daemon comes up alongside a live stale tunnel.
+		boom := func() error { return errors.New("stopping dvpn-c0: operation not permitted") }
+		client.SetService(rt, sdktest.FakeName, fakeClientConfig{
+			hooks: clientHooks{onCleanupError: &boom},
+			state: sdktest.NewFakeState(sdktest.FakeName),
+		})
+
+		err := rt.Recover(t.Context())
+		require.ErrorIs(t, err, client.ErrServiceCleanupFailed)
+		require.False(t, client.Recovered(rt))
+	})
+}

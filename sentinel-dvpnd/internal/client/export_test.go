@@ -149,6 +149,8 @@ func SetFirewallBackend(r *Runtime, backend firewallBackend) { r.firewallBackend
 
 func SetInterfaceRemover(r *Runtime, remover leftover.InterfaceRemover) { r.remover = remover }
 
+func SetRemoveCopies(r *Runtime, fn func([]string, string) error) { r.removeCopies = fn }
+
 func SetLookup(r *Runtime, lookup func(context.Context, string, string) ([]netip.Addr, error)) {
 	r.lookup = lookup
 }

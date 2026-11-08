@@ -12,7 +12,6 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/sentinel-official/sentinel-dvpnd/internal/config"
-	"github.com/sentinel-official/sentinel-dvpnd/internal/leftover"
 	"github.com/sentinel-official/sentinel-dvpnd/internal/rpcpin"
 	"github.com/sentinel-official/sentinel-go-sdk/v3/amneziawg"
 	"github.com/sentinel-official/sentinel-go-sdk/v3/api"
@@ -112,12 +111,22 @@ func (r *Runtime) clearLeftovers(ctx context.Context) error {
 	for _, name := range names {
 		dirs = append(dirs, r.placement(name).ToolDir)
 
+		// clearServiceLeftovers tears down a previous run's LIVE state: a stale tunnel process
+		// (KillStale), the stale interface (the runner's Cleanup), an orphan adapter. A failure
+		// there can leave a live tunnel up, so it stays fatal.
 		if err := r.clearServiceLeftovers(ctx, name); err != nil {
 			result = errors.Join(result, fmt.Errorf("clearing %s leftovers: %w", name, err))
 		}
 	}
 
-	return errors.Join(result, leftover.RemoveCopies(dirs, r.iface))
+	// Removing leftover tool-dir file COPIES is best-effort: a stale copy (e.g. root-owned, from
+	// a prior privileged run, that a later non-root run cannot delete) is an old artifact, not a
+	// live leak, and is overwritten on the next start, so it must not abort recovery.
+	if err := r.removeCopies(dirs, r.iface); err != nil {
+		r.log.Error().Err(err).Msg("removing leftover tool-dir copies; continuing daemon start")
+	}
+
+	return result
 }
 
 func (r *Runtime) clearServiceLeftovers(ctx context.Context, name service.Name) error {
