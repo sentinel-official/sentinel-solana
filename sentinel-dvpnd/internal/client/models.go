@@ -11,6 +11,9 @@ const (
 	ChannelStatusPending = "pending"
 	SessionStatusActive  = "active"
 	SessionStatusEnded   = "ended"
+	// SessionStatusReconnecting: the node cannot be reached (a failing poll, or no contact for a while), or the
+	// daemon is redialling it after the node timeout. Back to active on the next contact or redial.
+	SessionStatusReconnecting = "reconnecting"
 )
 
 type Channel struct {

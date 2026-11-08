@@ -61,7 +61,7 @@ func (r *Runtime) activateSession(
 	cleanup *cleanupStack,
 ) error {
 	now := time.Now()
-	conn.lastContactUnix = now.Unix()
+	conn.lastContact = monoNow()
 	conn.session.ID = opened.SessionID
 	conn.session.NodeAddress = req.GetNode()
 	conn.session.ProxyEndpoint = conn.service.ProxyEndpoint()
@@ -142,6 +142,7 @@ func (r *Runtime) connect(
 	terms := r.terms(node)
 	conn := &connection{
 		cancel:     placeholder.cancel,
+		replaces:   placeholder.replaces,
 		heartbeat:  max(time.Second, time.Duration(dial.metadata.Settlement.HeartbeatSeconds)*time.Second),
 		nodeClient: dial.client,
 		session: Session{
@@ -653,6 +654,7 @@ func (r *Runtime) startTunnel(
 	})
 
 	conn.iface = conn.service.Interface()
+	r.dropPinnedConns("tunnel up")
 
 	return ticket, allowed, nil
 }
