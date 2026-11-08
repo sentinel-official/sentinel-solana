@@ -12,6 +12,7 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 
+	"github.com/sentinel-official/sentinel-dvpnd/internal/chainread"
 	"github.com/sentinel-official/sentinel-go-sdk/v3/api"
 	"github.com/sentinel-official/sentinel-go-sdk/v3/nodeapi"
 	"github.com/sentinel-official/sentinel-go-sdk/v3/session"
@@ -74,45 +75,122 @@ func (r *Runtime) markPositionClosed(ctx context.Context, position *Position, no
 }
 
 func (r *Runtime) refreshPosition(ctx context.Context, kind string, address solana.PublicKey) (*Position, error) {
-	var position *Position
-
 	switch kind {
 	case KindChannel:
 		account, err := r.programClient.FetchChannel(ctx, address)
-		if errors.Is(err, core.ErrAccountNotFound) || errors.Is(err, core.ErrOwnerMismatch) {
-			return nil, api.ErrChannelNotOpen
-		}
 
-		if err != nil {
-			return nil, fmt.Errorf("fetching channel %s: %w", address, err)
-		}
-
-		if account.Value.Node != r.address {
-			return nil, api.ErrChannelNotOpen
-		}
-
-		position = positionFromChannel(address, account.Value)
-		position.ChainSlot = account.Slot
+		return r.refreshedChannel(ctx, address, account, err)
 	case KindLease:
 		account, err := r.programClient.FetchLease(ctx, address)
-		if errors.Is(err, core.ErrAccountNotFound) || errors.Is(err, core.ErrOwnerMismatch) {
-			return nil, api.ErrChannelNotOpen
-		}
 
-		if err != nil {
-			return nil, fmt.Errorf("fetching lease %s: %w", address, err)
-		}
-
-		if account.Value.Node != r.address {
-			return nil, api.ErrChannelNotOpen
-		}
-
-		position = positionFromLease(address, account.Value)
-		position.ChainSlot = account.Slot
+		return r.refreshedLease(ctx, address, account, err)
 	default:
 		return nil, api.ErrBadRequest
 	}
+}
 
+// refreshedChannel saves a channel read from the chain (one fetch or one item of a batch).
+func (r *Runtime) refreshedChannel(
+	ctx context.Context,
+	address solana.PublicKey,
+	account core.Keyed[dvpn.Channel],
+	err error,
+) (*Position, error) {
+	if errors.Is(err, core.ErrAccountNotFound) || errors.Is(err, core.ErrOwnerMismatch) {
+		return nil, api.ErrChannelNotOpen
+	}
+
+	if err != nil {
+		return nil, fmt.Errorf("fetching channel %s: %w", address, err)
+	}
+
+	if account.Value.Node != r.address {
+		return nil, api.ErrChannelNotOpen
+	}
+
+	position := positionFromChannel(address, account.Value)
+	position.ChainSlot = account.Slot
+
+	return r.saveFetchedPosition(ctx, position)
+}
+
+// refreshedLease saves a lease read from the chain (one fetch or one item of a batch).
+func (r *Runtime) refreshedLease(
+	ctx context.Context,
+	address solana.PublicKey,
+	account core.Keyed[dvpn.Lease],
+	err error,
+) (*Position, error) {
+	if errors.Is(err, core.ErrAccountNotFound) || errors.Is(err, core.ErrOwnerMismatch) {
+		return nil, api.ErrChannelNotOpen
+	}
+
+	if err != nil {
+		return nil, fmt.Errorf("fetching lease %s: %w", address, err)
+	}
+
+	if account.Value.Node != r.address {
+		return nil, api.ErrChannelNotOpen
+	}
+
+	position := positionFromLease(address, account.Value)
+	position.ChainSlot = account.Slot
+
+	return r.saveFetchedPosition(ctx, position)
+}
+
+// fetchPositions reads every position's account in batches and returns, per index, the same
+// result refreshPosition would give for it.
+func (r *Runtime) fetchPositions(
+	ctx context.Context,
+	positions []Position,
+) (func(context.Context, int) (*Position, error), error) {
+	var channelAddrs, leaseAddrs []solana.PublicKey
+
+	addresses := make([]solana.PublicKey, len(positions))
+	slot := make([]int, len(positions))
+
+	for i := range positions {
+		addresses[i], _ = solana.PublicKeyFromBase58(positions[i].Address)
+
+		switch positions[i].Kind {
+		case KindChannel:
+			slot[i] = len(channelAddrs)
+			channelAddrs = append(channelAddrs, addresses[i])
+		case KindLease:
+			slot[i] = len(leaseAddrs)
+			leaseAddrs = append(leaseAddrs, addresses[i])
+		}
+	}
+
+	channels, err := chainread.Channels(ctx, &r.programClient.Client, channelAddrs)
+	if err != nil {
+		return nil, fmt.Errorf("fetching %d channels: %w", len(channelAddrs), err)
+	}
+
+	leases, err := chainread.Leases(ctx, &r.programClient.Client, leaseAddrs)
+	if err != nil {
+		return nil, fmt.Errorf("fetching %d leases: %w", len(leaseAddrs), err)
+	}
+
+	return func(ctx context.Context, i int) (*Position, error) {
+		switch positions[i].Kind {
+		case KindChannel:
+			got := channels[slot[i]]
+
+			return r.refreshedChannel(ctx, addresses[i], got.Account, got.Err)
+		case KindLease:
+			got := leases[slot[i]]
+
+			return r.refreshedLease(ctx, addresses[i], got.Account, got.Err)
+		default:
+			return nil, api.ErrBadRequest
+		}
+	}, nil
+}
+
+// saveFetchedPosition stores a position read from the chain (one fetch or one item of a batch).
+func (r *Runtime) saveFetchedPosition(ctx context.Context, position *Position) (*Position, error) {
 	if position.Kind == KindLease && position.Mode == dvpn.PositionModeVoucher && position.RatePerHour == 0 {
 		_, node := r.chainState()
 		position.RatePerHour = node.LeasePricePerHour
@@ -220,11 +298,17 @@ func (r *Runtime) syncPositions(ctx context.Context) error {
 	now := time.Now().Unix()
 	redeemClosing := false
 
+	// Runs every minute over every open position: one getMultipleAccounts per 100 channels and
+	// per 100 leases, instead of one getAccountInfo per position.
+	fetched, err := r.fetchPositions(ctx, positions)
+	if err != nil {
+		return err
+	}
+
 	for i := range positions {
 		stored := positions[i]
-		address, _ := solana.PublicKeyFromBase58(stored.Address)
 
-		fresh, err := r.refreshPosition(ctx, stored.Kind, address)
+		fresh, err := fetched(ctx, i)
 		if errors.Is(err, api.ErrChannelNotOpen) {
 			closed, closeErr := r.markPositionClosed(ctx, &stored, now)
 			if closeErr != nil {
