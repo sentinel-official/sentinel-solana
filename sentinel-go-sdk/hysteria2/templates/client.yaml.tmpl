@@ -17,9 +17,11 @@ tls:
     ipv4:
       - 0.0.0.0/0
     ipv6:
-      - ::/0
-{{ if .ExcludeV4 }}    ipv4Exclude:
-      - "{{ .ExcludeV4 }}"
-{{ end }}{{ if .ExcludeV6 }}    ipv6Exclude:
-      - "{{ .ExcludeV6 }}"
-{{ end }}
+      - {{ .RouteV6 }}
+{{ if or .ExcludeV4 .LocalV4 }}    ipv4Exclude:
+{{ if .ExcludeV4 }}      - "{{ .ExcludeV4 }}"
+{{ end }}{{ range .LocalV4 }}      - "{{ . }}"
+{{ end }}{{ end }}{{ if or .ExcludeV6 .LocalV6 }}    ipv6Exclude:
+{{ if .ExcludeV6 }}      - "{{ .ExcludeV6 }}"
+{{ end }}{{ range .LocalV6 }}      - "{{ . }}"
+{{ end }}{{ end }}
