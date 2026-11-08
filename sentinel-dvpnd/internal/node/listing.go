@@ -16,13 +16,39 @@ import (
 	"github.com/sentinel-official/sentinel-programs/clients/go/dvpn"
 )
 
+// heartbeatRenewWithin: how long before its listing lapses the node starts renewing it (capped at
+// half the listing TTL). The worker checks every sendHeartbeatInterval from the cached chain state
+// and sends nothing until then, so a renewal that fails (an RPC rate limit, say) is retried every
+// few minutes for hours. Before, the node checked hourly and renewed only within the last hour, so
+// one failed attempt let the listing lapse and every channel open failed with NodeNotLive for an
+// hour or more.
+const heartbeatRenewWithin = 6 * time.Hour
+
+func renewWindow(ttlSeconds uint32) int64 {
+	return min(int64(heartbeatRenewWithin.Seconds()), int64(ttlSeconds)/2)
+}
+
 func (r *Runtime) sendHeartbeat(ctx context.Context) error {
 	chainCfg, node := r.chainState()
 
 	remaining := node.ListedAt + int64(chainCfg.NodeListingTTLSeconds) - time.Now().Unix()
-	if node.Status == dvpn.ListingStatusListed && remaining > int64(sendHeartbeatInterval.Seconds()) {
+	if node.Status == dvpn.ListingStatusListed && remaining > renewWindow(chainCfg.NodeListingTTLSeconds) {
 		return nil
 	}
+
+	if err := r.renewListing(ctx); err != nil {
+		if node.Status == dvpn.ListingStatusListed && remaining <= 0 {
+			return fmt.Errorf("node listing lapsed %d s ago; channel opens fail with NodeNotLive until it is renewed: %w",
+				-remaining, err)
+		}
+
+		return err
+	}
+
+	return nil
+}
+
+func (r *Runtime) renewListing(ctx context.Context) error {
 
 	grant, err := r.programClient.GrantAddress(ctx, r.owner, r.signer, dvpn.PermListNode, r.address)
 	if err != nil {

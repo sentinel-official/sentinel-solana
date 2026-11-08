@@ -127,6 +127,8 @@ func RequestLeaseVouchers(ctx context.Context, r *Runtime, now int64) {
 
 func SendHeartbeat(ctx context.Context, r *Runtime) error { return r.sendHeartbeat(ctx) }
 
+const SendHeartbeatInterval = sendHeartbeatInterval
+
 func SetChainNode(r *Runtime, node dvpn.Node) {
 	r.mu.Lock()
 	r.chainNode = node

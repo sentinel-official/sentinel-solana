@@ -28,6 +28,40 @@ func TestRuntime_SendHeartbeat_SendsWhenListingStale(t *testing.T) {
 	require.Len(t, home.RPC.Sent(), 1)
 }
 
+// A node renews its listing hours before it lapses, not only in its last hour: a renewal that fails
+// (the RPC rate limits the node, say) is then retried many times before channel opens see
+// NodeNotLive.
+func TestRuntime_SendHeartbeat_RenewsHoursBeforeTheListingLapses(t *testing.T) {
+	t.Parallel()
+
+	r, home, _ := newRuntime(t)
+	chainCfg, chainNode := node.ChainState(r)
+	require.GreaterOrEqual(t, chainCfg.NodeListingTTLSeconds, uint32(12*3600), "fixture TTL")
+
+	chainNode.ListedAt = time.Now().Unix() - int64(chainCfg.NodeListingTTLSeconds) + 3*3600
+	node.SetChainNode(r, chainNode)
+	require.NoError(t, node.SendHeartbeat(t.Context(), r))
+	require.Len(t, home.RPC.Sent(), 1, "3 h left: renew now, leaving hours for retries")
+}
+
+func TestRuntime_SendHeartbeat_LeavesAFreshListingAlone(t *testing.T) {
+	t.Parallel()
+
+	r, home, _ := newRuntime(t)
+	_, chainNode := node.ChainState(r)
+	chainNode.ListedAt = time.Now().Unix()
+	node.SetChainNode(r, chainNode)
+	require.NoError(t, node.SendHeartbeat(t.Context(), r))
+	require.Empty(t, home.RPC.Sent())
+}
+
+func TestRuntime_SendHeartbeat_RetriesWithinMinutes(t *testing.T) {
+	t.Parallel()
+
+	require.LessOrEqual(t, node.SendHeartbeatInterval, 10*time.Minute,
+		"a failed renewal waits one worker interval before the next try")
+}
+
 func TestRuntime_SyncConfig_RefreshesCacheAfterPush(t *testing.T) {
 	t.Parallel()
 

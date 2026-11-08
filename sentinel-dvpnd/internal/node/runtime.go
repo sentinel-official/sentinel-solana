@@ -48,7 +48,7 @@ const (
 	redeemInterval            = time.Hour
 	refreshMetadataInterval   = 20 * time.Minute
 	runSpeedtestInterval      = 168 * time.Hour
-	sendHeartbeatInterval     = time.Hour
+	sendHeartbeatInterval     = 5 * time.Minute
 	syncConfigInterval        = 5 * time.Minute
 	syncPositionsInterval     = time.Minute
 	syncUsageInterval         = time.Second
