@@ -84,6 +84,7 @@ func newKeyCmd(opts *instanceOptions) *cobra.Command {
 
 		return nil
 	}
+	cmd.AddCommand(newKeySweepCmd(opts))
 
 	return cmd
 }

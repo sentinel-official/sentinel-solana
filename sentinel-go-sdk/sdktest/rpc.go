@@ -21,6 +21,9 @@ import (
 	"github.com/sentinel-official/sentinel-programs/clients/go/dvpn"
 )
 
+// FeeLamports is the fee the fake quotes for any message (one signature at the base rate).
+const FeeLamports = 5_000
+
 type Account struct {
 	Data     []byte
 	Lamports uint64
@@ -239,6 +242,8 @@ func (f *FakeRPC) dispatch(req request) (any, *rpcError) {
 		return time.Now().Unix(), nil
 	case "getHealth":
 		return "ok", nil
+	case "getFeeForMessage":
+		return map[string]any{"context": f.context(), "value": FeeLamports}, nil
 	case "sendTransaction":
 		return f.sendTransaction(req.Params)
 	case "simulateTransaction":
