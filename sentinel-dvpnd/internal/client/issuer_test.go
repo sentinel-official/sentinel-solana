@@ -342,6 +342,92 @@ func TestRuntime_IssueLoop_ReconnectsOnNodeTimeout(t *testing.T) {
 	require.Eventually(t, func() bool { return home.NodeService.OpenedCount() >= 2 }, 5*time.Second, 10*time.Millisecond)
 }
 
+func TestRuntime_IssueLoop_ReportsReconnectingWhileNodeUnreachable(t *testing.T) {
+	t.Parallel()
+
+	// A silent stream: polls are the only contact. The node timeout is far away, so only the status can tell.
+	rt, home, _ := newIssuerFixture(t, 100_000, true)
+	home.Loaded.Client.NodeTimeoutSeconds = 3600
+	row := startIssuer(t, rt, home)
+
+	home.NodeService.SetGetSessionErr(api.ErrInternal, 1_000_000)
+	require.Eventually(t, func() bool {
+		current, ok := client.Current(rt)
+
+		return ok && current.ID == row.ID && current.Status == client.SessionStatusReconnecting
+	}, 5*time.Second, 10*time.Millisecond)
+
+	home.NodeService.SetGetSessionErr(nil, 0)
+	require.Eventually(t, func() bool {
+		current, ok := client.Current(rt)
+
+		return ok && current.ID == row.ID && current.Status == client.SessionStatusActive
+	}, 5*time.Second, 10*time.Millisecond)
+	require.Equal(t, 1, home.NodeService.OpenedCount())
+}
+
+// redialWindow times the node out and returns while the daemon waits to redial (backoff 2 s before attempt 1).
+func redialWindow(t *testing.T) (*client.Runtime, testutil.Home, *client.Session) {
+	t.Helper()
+
+	rt, home, _ := newIssuerFixture(t, 100_000, true)
+	client.SetTiming(rt, time.Hour, 50*time.Millisecond, 3, 2*time.Second)
+	home.Loaded.Client.NodeTimeoutSeconds = 1
+	row := startIssuer(t, rt, home)
+
+	home.NodeService.SetGetSessionErr(api.ErrInternal, 1_000_000)
+	waitIssuerEnded(t, home, row.ID, "connection lost")
+
+	return rt, home, row
+}
+
+func TestRuntime_Reconnect_ShowsTheRedialledSession(t *testing.T) {
+	t.Parallel()
+
+	rt, _, row := redialWindow(t)
+	current, ok := client.Current(rt)
+	require.True(t, ok, "status must not say 'no session' while the daemon redials")
+	require.Equal(t, row.ID, current.ID)
+	require.Equal(t, client.SessionStatusReconnecting, current.Status)
+}
+
+func TestRuntime_Reconnect_StopByIDCancelsTheRedial(t *testing.T) {
+	t.Parallel()
+
+	rt, home, row := redialWindow(t)
+	require.NoError(t, client.StopSessionByID(t.Context(), rt, row.ID))
+
+	_, ok := client.Current(rt)
+	require.False(t, ok)
+
+	home.NodeService.SetGetSessionErr(nil, 0)
+	time.Sleep(3 * time.Second) // past the first redial attempt
+	require.Equal(t, 1, home.NodeService.OpenedCount(), "a stopped redial must not open a session")
+}
+
+func TestRuntime_Reconnect_StartReplacesTheRedial(t *testing.T) {
+	t.Parallel()
+
+	rt, home, row := redialWindow(t)
+	home.NodeService.SetGetSessionErr(nil, 0)
+
+	req := &daemonv1.StartSessionRequest{
+		Credential: &daemonv1.Credential{Kind: &daemonv1.Credential_Channel{Channel: row.ChannelAddress}},
+		Node:       home.NodeAddress.String(),
+	}
+	started, err := client.StartSession(t.Context(), rt, req)
+	require.NoError(t, err, "a start while the daemon redials must not fail with 'a session is already active'")
+	require.NotEqual(t, row.ID, started.ID)
+
+	current, ok := client.Current(rt)
+	require.True(t, ok)
+	require.Equal(t, started.ID, current.ID)
+	require.Equal(t, client.SessionStatusActive, current.Status)
+
+	time.Sleep(3 * time.Second) // past the cancelled redial's first attempt
+	require.Equal(t, 2, home.NodeService.OpenedCount(), "the replaced redial must not open a session")
+}
+
 func TestRuntime_IssueLoop_ReconnectsWhenVoucherPostsFail(t *testing.T) {
 	t.Parallel()
 
@@ -597,4 +683,83 @@ func waitIssuerEnded(t *testing.T, home testutil.Home, id, reason string) {
 
 		return row.Status == client.SessionStatusEnded && row.Error == reason
 	}, 5*time.Second, 5*time.Millisecond)
+}
+
+func TestRuntime_Reconnect_ListShowsTheRedialAsReconnecting(t *testing.T) {
+	t.Parallel()
+
+	rt, _, row := redialWindow(t)
+	listed, err := client.ListSessionsFor(t.Context(), rt)
+	require.NoError(t, err)
+
+	var status string
+	for _, s := range listed.GetSessions() {
+		if s.GetId() == row.ID {
+			status = s.GetStatus()
+		}
+	}
+	require.Equal(t, client.SessionStatusReconnecting, status, "the list must agree with status during a redial")
+}
+
+// A start that replaces a redial must not set up its session until the old one is torn down: that teardown reverts
+// DNS and stops the service, and run alongside the new session it would undo the new session's DNS and firewall.
+// What guarantees it is the turn queue: runSession keeps the first start's turn through supervise, and so through
+// the redial and its teardown, and the next start's connect waits for that turn.
+func TestRuntime_Reconnect_StartWaitsForTheRedialTeardown(t *testing.T) {
+	t.Parallel()
+
+	rt, home, _ := newIssuerFixture(t, 100_000, true)
+	client.SetTiming(rt, time.Hour, 50*time.Millisecond, 3, 2*time.Second)
+	home.Loaded.Client.NodeTimeoutSeconds = 1
+	row := startIssuer(t, rt, home)
+
+	entered, release := home.NodeService.HoldClose()
+	t.Cleanup(release)
+	home.NodeService.SetGetSessionErr(api.ErrInternal, 1_000_000)
+
+	select {
+	case <-entered: // the redial published its placeholder and its teardown is closing the old session
+	case <-time.After(10 * time.Second):
+		t.Fatal("the redial never closed the old session")
+	}
+	home.NodeService.SetGetSessionErr(nil, 0)
+
+	req := &daemonv1.StartSessionRequest{
+		Credential: &daemonv1.Credential{Kind: &daemonv1.Credential_Channel{Channel: row.ChannelAddress}},
+		Node:       home.NodeAddress.String(),
+	}
+
+	type result struct {
+		s   *client.Session
+		err error
+	}
+	done := make(chan result, 1)
+	go func() {
+		s, err := client.StartSession(t.Context(), rt, req)
+		done <- result{s, err}
+	}()
+
+	select {
+	case got := <-done:
+		t.Fatalf("the start returned (%v) while the old session's teardown was still running", got.err)
+	case <-time.After(500 * time.Millisecond):
+	}
+
+	release()
+
+	var got result
+	select {
+	case got = <-done:
+	case <-time.After(15 * time.Second):
+		t.Fatal("the start never returned after the teardown finished")
+	}
+	require.NoError(t, got.err)
+
+	var ended client.Session
+	require.NoError(t, home.DB.WithContext(t.Context()).First(&ended, "id = ?", row.ID).Error)
+	require.Equal(t, client.SessionStatusEnded, ended.Status, "the old teardown must be done before the new session starts")
+
+	current, ok := client.Current(rt)
+	require.True(t, ok)
+	require.Equal(t, got.s.ID, current.ID)
 }

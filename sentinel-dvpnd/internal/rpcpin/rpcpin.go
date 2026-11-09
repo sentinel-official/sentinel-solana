@@ -30,6 +30,9 @@ type Pin struct {
 	dialer net.Dialer
 	hosts  map[string]*pinnedHost
 	mu     sync.RWMutex
+
+	connMu sync.Mutex
+	conns  map[*pinConn]struct{} // every connection dialled, for CloseConns
 }
 
 func (p *Pin) Clear() {
@@ -39,7 +42,18 @@ func (p *Pin) Clear() {
 	clear(p.hosts)
 }
 
+// DialContext dials addr (an admitted address when pinned) and remembers the connection for
+// CloseConns.
 func (p *Pin) DialContext(ctx context.Context, network, addr string) (net.Conn, error) {
+	conn, err := p.dial(ctx, network, addr)
+	if err != nil {
+		return nil, err
+	}
+
+	return p.track(conn), nil
+}
+
+func (p *Pin) dial(ctx context.Context, network, addr string) (net.Conn, error) {
 	host := p.host(addr)
 
 	if host == nil {
@@ -217,4 +231,57 @@ func hostIsName(rawURL string) bool {
 	_, err = netip.ParseAddr(u.Hostname())
 
 	return err != nil
+}
+
+// CloseConns closes every connection this pin dialled; HTTP clients redial on their next request,
+// over the route the system has now (macOS, WireGuard <-> AmneziaWG switch: the RPC's idle keep-alive
+// connection was opened while the old utun carried the route, and the next session's getAccountInfo
+// waited 10 s on it after the utun was gone). It returns how many were closed.
+func (p *Pin) CloseConns() int {
+	p.connMu.Lock()
+	open := make([]*pinConn, 0, len(p.conns))
+	for c := range p.conns {
+		open = append(open, c)
+	}
+	p.connMu.Unlock()
+
+	for _, c := range open {
+		_ = c.Close() // the point is that none stays open; an already-closed one is fine
+	}
+
+	return len(open)
+}
+
+func (p *Pin) track(conn net.Conn) net.Conn {
+	c := &pinConn{Conn: conn, pin: p}
+
+	p.connMu.Lock()
+	if p.conns == nil {
+		p.conns = map[*pinConn]struct{}{}
+	}
+	p.conns[c] = struct{}{}
+	p.connMu.Unlock()
+
+	return c
+}
+
+type pinConn struct {
+	net.Conn
+
+	once sync.Once
+	pin  *Pin
+}
+
+func (c *pinConn) Close() error {
+	var err error
+
+	c.once.Do(func() {
+		c.pin.connMu.Lock()
+		delete(c.pin.conns, c)
+		c.pin.connMu.Unlock()
+
+		err = c.Conn.Close()
+	})
+
+	return err
 }

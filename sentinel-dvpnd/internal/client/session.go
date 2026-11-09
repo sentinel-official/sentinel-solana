@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"sync"
 	"time"
 
@@ -37,27 +38,31 @@ var (
 )
 
 type connection struct {
-	block                   uint64
-	cancel                  context.CancelFunc
-	channel                 *Channel
-	heartbeat               time.Duration
-	iface                   string
-	issueMu                 sync.Mutex
-	lastContactUnix         int64
-	minBlock                uint64
-	nodeClient              *nodeapi.ClientWithResponses
-	nodeOwed                uint64
-	nodeSettled             uint64
-	nodeUsage               session.Usage
-	payer                   *session.Payer
-	pollFailingSinceUnix    int64
-	remoteClosed            bool
-	service                 service.Client
-	session                 Session
-	statsFailures           uint
-	streamClient            *nodeapi.ClientWithResponses
-	terms                   session.Terms
-	voucherFailingSinceUnix int64
+	block            uint64
+	cancel           context.CancelFunc
+	channel          *Channel
+	heartbeat        time.Duration
+	iface            string
+	issueMu          sync.Mutex
+	lastContact      time.Duration // monoNow() of the last node answer
+	minBlock         uint64
+	nodeClient       *nodeapi.ClientWithResponses
+	nodeOwed         uint64
+	nodeSettled      uint64
+	nodeUsage        session.Usage
+	payer            *session.Payer
+	pollFailingSince time.Duration // monoNow() of the first failed poll; 0 = not failing
+	// redialOf is set on the placeholder of an automatic reconnect: the session being redialled. Status shows it
+	// as reconnecting, a stop by its ID cancels the redial, and a new start replaces the redial.
+	redialOf            *Session
+	remoteClosed        bool
+	replaces            []string
+	service             service.Client
+	session             Session
+	statsFailures       uint
+	streamClient        *nodeapi.ClientWithResponses
+	terms               session.Terms
+	voucherFailingSince time.Duration // monoNow() of the first failed voucher; 0 = not failing
 }
 
 type startResult struct {
@@ -127,7 +132,13 @@ func (r *Runtime) claim() (*connection, context.Context, turn, error) {
 	}
 
 	if r.connection != nil {
-		return nil, nil, turn{}, ErrSessionActive
+		if r.connection.redialOf == nil {
+			return nil, nil, turn{}, ErrSessionActive
+		}
+
+		// A start while the daemon redials a lost node replaces the redial: cancelling its lifecycle ends the
+		// reconnect loop, and a redial that completes anyway no longer owns the connection and is torn down.
+		r.clearConnectionLocked()
 	}
 
 	lifecycle, cancel := context.WithCancel(context.Background())
@@ -203,6 +214,14 @@ func (r *Runtime) owns(placeholder *connection) bool {
 }
 
 func (r *Runtime) publishLocked() {
+	if r.connection != nil && r.connection.session.ID == "" && r.connection.redialOf != nil {
+		redial := *r.connection.redialOf
+		redial.Status = SessionStatusReconnecting
+		r.snapshot.Store(&redial)
+
+		return
+	}
+
 	if r.connection == nil || r.connection.session.ID == "" {
 		r.snapshot.Store(nil)
 
@@ -357,7 +376,8 @@ func (r *Runtime) takeConnection(reason, id string) (*connection, turn, error) {
 	}
 
 	conn := r.connection
-	if id != "" && conn != nil && conn.session.ID != id {
+	// A redial placeholder carries the redialled id in replaces, so a stop by it also cancels the redial.
+	if id != "" && conn != nil && conn.session.ID != id && !slices.Contains(conn.replaces, id) {
 		return nil, turn{}, errMissingSession
 	}
 
@@ -395,20 +415,22 @@ func (r *Runtime) teardown(ctx context.Context, conn *connection, reason string)
 		}
 
 		r.stopService(ctx, conn.service)
+		r.dropPinnedConns("tunnel down")
 	}
 
 	var result stopResult
 
 	result.dnsRevertFailed = r.revertDNS(ctx) != nil
 
-	if reason != reasonConnectionLost &&
-		(reason != reasonDaemonStopping || r.cfg.Network.KillSwitch != config.KillSwitchPersist) {
+	if !keepsFirewall(reason, r.cfg.Network.KillSwitch) {
 		released, err := r.releaseFirewall(ctx, false)
 		if err != nil {
 			r.log.Error().Err(err).Msg("releasing the kill switch; StopSession retries it")
 		}
 
 		result.killSwitchReleased = released
+	} else if r.cfg.Network.KillSwitch != config.KillSwitchOff && reason != reasonStoppedByUser {
+		r.log.Warn().Str("kill_switch", r.cfg.Network.KillSwitch).Str("reason", reason).Msg("the session ended but the kill switch is still blocking the internet; disconnect to restore normal internet")
 	}
 
 	if sessionID == "" {
@@ -466,4 +488,62 @@ func (r *Runtime) watch(sessionID string) (*watcher, *Session) {
 	copied := *s
 
 	return w, &copied
+}
+
+// keepsFirewall decides whether a session end KEEPS the kill-switch block in place. Ported from the
+// product decision: with "on", a session that ends for a reason the user did not ask for keeps the
+// exhausted, node overcharging, the node closing or forgetting the session, a daemon restart) — no
+// lift, no leak. Only the user (Disconnect / Restore network), a daemon stop (persist keeps even
+// that) and kill switch off lift it. "persist" keeps the block for every end the user did not ask for.
+func keepsFirewall(reason, killSwitch string) bool {
+	if killSwitch == config.KillSwitchPersist && reason != reasonStoppedByUser {
+		return true
+	}
+
+	switch reason {
+	case reasonConnectionLost, reasonStatsUnavailable:
+		return true
+	case reasonDaemonStopping:
+		return killSwitch == config.KillSwitchPersist
+	case reasonStoppedByUser:
+		return false
+	default:
+		return killSwitch == config.KillSwitchOn
+	}
+}
+
+// liveSession returns the current session when id is its own, or the id of a session it replaced in an
+// automatic reconnect (connection.replaces, oldest first): the caller keeps the id it started, so that id reads
+// the live session (its own id) instead of the ended row, and StopSession accepts it too (takeConnection).
+func (r *Runtime) liveSession(id string) (*Session, bool) {
+	s, ok := r.current()
+	if !ok {
+		return nil, false
+	}
+
+	if s.ID == id {
+		return s, true
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	conn := r.connection
+
+	return s, conn != nil && conn.session.ID == s.ID && slices.Contains(conn.replaces, id)
+}
+
+// dropPinnedConns closes every connection dialled through the pin (chain RPC and node API) when the
+// tunnel comes up or goes down. Their sockets keep the source address and route they were opened on:
+// one opened before the tunnel keeps the physical address and, once the tunnel carries the route, its
+// packets go into the tunnel with a source the peer does not accept, so the request hangs until its
+// timeout. The HTTP clients redial on their next request, over the current route.
+func (r *Runtime) dropPinnedConns(why string) {
+	if r.pin == nil {
+		return
+	}
+
+	if n := r.pin.CloseConns(); n > 0 {
+		r.log.Debug().Int("closed", n).Str("why", why).Msg("dropped pooled connections")
+	}
 }
