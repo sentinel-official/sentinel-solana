@@ -56,7 +56,7 @@ func (h *handler) GetChannel(
 		return nil, err
 	}
 
-	position, err := h.runtime.refreshPosition(ctx, KindChannel, req.Channel)
+	position, err := h.runtime.positionForRequest(ctx, KindChannel, req.Channel)
 	if err != nil {
 		return nil, err
 	}
@@ -92,7 +92,7 @@ func (h *handler) GetLease(
 		return nil, err
 	}
 
-	position, err := h.runtime.refreshPosition(ctx, KindLease, req.Lease)
+	position, err := h.runtime.positionForRequest(ctx, KindLease, req.Lease)
 	if err != nil {
 		return nil, err
 	}
@@ -118,7 +118,7 @@ func (h *handler) GetLeaseEvents(
 		return nil, err
 	}
 
-	position, err := h.runtime.refreshPosition(ctx, KindLease, req.Lease)
+	position, err := h.runtime.positionForRequest(ctx, KindLease, req.Lease)
 	if err != nil {
 		return nil, err
 	}

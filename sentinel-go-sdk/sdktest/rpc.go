@@ -28,11 +28,13 @@ type Account struct {
 }
 
 type FakeRPC struct {
-	Blockhash                 solana.Hash
-	BlockHeight               uint64
-	LandedErr                 any
-	Logs                      []string
-	PrioritizationFees        []uint64
+	Blockhash          solana.Hash
+	BlockHeight        uint64
+	LandedErr          any
+	Logs               []string
+	PrioritizationFees []uint64
+	// RateLimited: HTTP 429 for the next N calls of a method, as a public RPC answers.
+	RateLimited               map[string]int
 	Server                    *httptest.Server
 	Simulate                  func(tx *solana.Transaction) SimulateResult
 	Slot                      uint64
@@ -112,6 +114,14 @@ func (f *FakeRPC) ServeHTTP(writer http.ResponseWriter, httpReq *http.Request) {
 	}
 
 	f.mu.Lock()
+	if f.RateLimited[req.Method] > 0 {
+		f.RateLimited[req.Method]--
+		f.mu.Unlock()
+		http.Error(writer, "Connection rate limits exceeded", http.StatusTooManyRequests)
+
+		return
+	}
+
 	if req.Method == "getSignatureStatuses" && f.StatusErrors > 0 {
 		f.StatusErrors--
 		f.mu.Unlock()

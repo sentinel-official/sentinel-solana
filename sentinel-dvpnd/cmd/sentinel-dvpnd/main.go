@@ -105,6 +105,7 @@ func newRootCmd() *cobra.Command {
 		newRunCmd(&opts),
 		newDoctorCmd(&opts, newKillSwitchProbe(), host),
 		newKeyCmd(&opts),
+		newTunnelGuardCmd(),
 		newServiceCmd(&opts, host),
 		cli.NewCompletionCmd("dvpnd"),
 		cli.NewVersionCmd(),

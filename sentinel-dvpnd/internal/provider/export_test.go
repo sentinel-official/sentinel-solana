@@ -106,3 +106,17 @@ func WatcherRunning(r *Runtime, address string) bool {
 
 	return r.watchers[address] != nil
 }
+
+// SetStartChainRetry shortens the start-up waits for a busy RPC; the returned func restores them.
+func SetStartChainRetry(first, maxDelay time.Duration) (restore func()) {
+	oldFirst, oldMax := startChainRetryFirst, startChainRetryMax
+	startChainRetryFirst, startChainRetryMax = first, maxDelay
+
+	return func() { startChainRetryFirst, startChainRetryMax = oldFirst, oldMax }
+}
+
+func SyncChain(ctx context.Context, r *Runtime) error {
+	_, err := r.syncChain(ctx)
+
+	return err
+}

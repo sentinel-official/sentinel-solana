@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -406,6 +407,64 @@ func TestRuntime_KeepLeases_OpensVoucherWithTrustedChainState(t *testing.T) {
 	)
 }
 
+// A node linked again while its old lease is still closing gets a new lease at once; it does not
+// wait out the old lease's close grace.
+func TestRuntime_KeepLeases_OpensNewLeaseWhileOldOneCloses(t *testing.T) {
+	t.Parallel()
+
+	home := testutil.NewProviderHome(t, sdktest.NewFakeRPC(t))
+	require.NoError(t, home.RPC.SetConfig(home.ProgramClient.ProgramID, dvpn.Config{
+		LeaseCloseGraceSeconds: 7_200, Mint: home.ProgramClient.Mint,
+	}))
+	r := newRuntime(t, home)
+	t.Cleanup(func() { require.NoError(t, r.Stop(t.Context())) })
+	nodeAccount, err := home.ProgramClient.FetchNode(t.Context(), home.NodeAddress)
+	require.NoError(t, err)
+
+	const ratePerHour = uint64(3_600_000)
+
+	node := nodeAccount.Value
+	node.LeasePricePerHour = ratePerHour
+	home.RPC.SetNode(home.ProgramClient.ProgramID, home.NodeAddress, node)
+
+	now := time.Now().Unix()
+	old := solana.PublicKey{42}
+	home.RPC.SetAccount(old, sdktest.Account{
+		Data: sdktest.EncodeAccount(dvpn.LeaseAccountDiscriminator, dvpn.Lease{
+			CloseStartedAt: now - 60, Escrow: ratePerHour, Mode: dvpn.PositionModeVoucher, Node: home.NodeAddress,
+			NodeOpenedAt: node.OpenedAt, OpenedAt: now - 3600, Provider: providerAddress(t, home),
+			Status: dvpn.PositionStatusClosing,
+		}),
+		Owner: home.ProgramClient.ProgramID,
+	})
+	require.NoError(t, home.DB.Create(&provider.Lease{
+		Address: old.String(), Escrow: ratePerHour, Mode: dvpn.PositionModeVoucher, Node: home.NodeAddress.String(),
+		NodeOpenedUnix: node.OpenedAt, OpenedUnix: now - 3600, RatePerHour: ratePerHour,
+		Status: provider.StatusClosing, UpdatedUnix: now,
+	}).Error)
+	require.NoError(t, provider.SyncChain(t.Context(), r)) // loads the close grace
+	require.NoError(t, home.DB.Create(&provider.RosterNode{Node: home.NodeAddress.String(), Plan: planName}).Error)
+	require.NoError(t, provider.ProbeNodes(t.Context(), r))
+
+	var opens atomic.Int32
+	home.RPC.Simulate = func(txn *solana.Transaction) sdktest.SimulateResult {
+		for _, instruction := range txn.Message.Instructions {
+			if bytes.HasPrefix([]byte(instruction.Data), dvpn.OpenLeaseInstructionDiscriminator[:]) {
+				opens.Add(1)
+			}
+		}
+
+		return sdktest.SimulateResult{UnitsConsumed: 5_000}
+	}
+
+	_ = provider.KeepLeases(t.Context(), r) // the fake chain never creates the new lease account
+	require.Equal(t, int32(1), opens.Load(), "a new lease is opened while the old one closes")
+
+	var oldRow provider.Lease
+	require.NoError(t, home.DB.First(&oldRow, "address = ?", old.String()).Error)
+	require.Equal(t, provider.StatusClosing, oldRow.Status, "the old lease keeps closing on its own")
+}
+
 func TestRuntime_KeepLeases_PreservesZeroPriceAndRetiresStaleEpoch(t *testing.T) {
 	t.Parallel()
 
@@ -801,7 +860,9 @@ func TestRuntime_KeepLeases_WatchesLiveVoucherLeases(t *testing.T) {
 	home.RPC.SetAccount(address, sdktest.Account{
 		Data: sdktest.EncodeAccount(dvpn.LeaseAccountDiscriminator, chainLease), Owner: home.ProgramClient.ProgramID,
 	})
-	require.NoError(t, provider.KeepLeases(t.Context(), r))
+	// The node is still a live roster member, so a new lease is opened beside the closing one; the
+	// fake chain never creates that account, hence the error.
+	require.ErrorContains(t, provider.KeepLeases(t.Context(), r), "fetching opened lease")
 	require.False(t, provider.WatcherRunning(r, lease.Address))
 
 	require.NoError(t, r.Stop(t.Context()))
