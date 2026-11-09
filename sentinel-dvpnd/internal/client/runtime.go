@@ -35,6 +35,9 @@ const (
 )
 
 type Runtime struct {
+	// admitted: node hosts added to a kept kill switch for a server switch (host → addresses),
+	// beyond the block's own node; cleared when the next session applies its own block.
+	admitted               map[string][]netip.Addr
 	callTimeout            time.Duration
 	cfg                    *config.Client
 	connection             *connection

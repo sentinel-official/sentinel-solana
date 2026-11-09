@@ -288,9 +288,15 @@ type killSwitchFixture struct {
 
 func newKillSwitchFixture(t *testing.T) killSwitchFixture {
 	t.Helper()
+
+	return newKillSwitchFixtureMode(t, config.KillSwitchPersist)
+}
+
+func newKillSwitchFixtureMode(t *testing.T, mode string) killSwitchFixture {
+	t.Helper()
 	fakeRPC := sdktest.NewFakeRPC(t)
 	home := testutil.NewClientHome(t, fakeRPC)
-	home.Loaded.Client.Network.KillSwitch = config.KillSwitchPersist
+	home.Loaded.Client.Network.KillSwitch = mode
 	ks := &fakeKillSwitchNet{base: http.DefaultTransport}
 	programClient := ks.programFor(t, fakeRPC, home.ProgramClient)
 	rt := newRuntime(t, home, programClient)

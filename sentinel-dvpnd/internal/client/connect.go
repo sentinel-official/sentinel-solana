@@ -61,7 +61,7 @@ func (r *Runtime) activateSession(
 	cleanup *cleanupStack,
 ) error {
 	now := time.Now()
-	conn.lastContactUnix = now.Unix()
+	conn.lastContact = monoNow()
 	conn.session.ID = opened.SessionID
 	conn.session.NodeAddress = req.GetNode()
 	conn.session.ProxyEndpoint = conn.service.ProxyEndpoint()
@@ -142,6 +142,7 @@ func (r *Runtime) connect(
 	terms := r.terms(node)
 	conn := &connection{
 		cancel:     placeholder.cancel,
+		replaces:   placeholder.replaces,
 		heartbeat:  max(time.Second, time.Duration(dial.metadata.Settlement.HeartbeatSeconds)*time.Second),
 		nodeClient: dial.client,
 		session: Session{
@@ -550,7 +551,7 @@ func (r *Runtime) reopenAndRetry(
 
 func (r *Runtime) resolveHost(ctx context.Context, host string) ([]netip.Addr, error) {
 	r.mu.Lock()
-	present, node := r.firewallState.present, r.nodeHosts
+	present, node, admitted := r.firewallState.present, r.nodeHosts, r.admitted[host]
 	r.mu.Unlock()
 
 	if present && len(node.addrs) > 0 {
@@ -558,14 +559,79 @@ func (r *Runtime) resolveHost(ctx context.Context, host string) ([]netip.Addr, e
 			return r.checkPublicAddrs(host, node.addrs)
 		}
 
+		if len(admitted) > 0 {
+			return r.checkPublicAddrs(host, admitted)
+		}
+
 		addr, err := netip.ParseAddr(host)
-		if err != nil || !slices.Contains(node.addrs, addr.Unmap()) {
+		if err != nil {
+			// A host name cannot be resolved under the block: StopSession with keep_kill_switch
+			// and next_node admits it while the previous tunnel is still up.
 			return nil, fmt.Errorf("%w: %s", errNodeNotAdmitted, host)
 		}
 
-		return r.checkPublicAddrs(host, []netip.Addr{addr.Unmap()})
+		addrs, err := r.checkPublicAddrs(host, []netip.Addr{addr.Unmap()})
+		if err != nil {
+			return nil, err
+		}
+
+		// A server switch to a node on another address: admit it to the block before dialing.
+		if !slices.Contains(node.addrs, addrs[0]) {
+			if err := r.admitToBlock(ctx, host, addrs); err != nil {
+				return nil, err
+			}
+		}
+
+		return addrs, nil
 	}
 
+	return r.lookupNode(ctx, host)
+}
+
+// admitNextNode is StopSession's next_node: while the session being stopped still carries DNS
+// through its tunnel, resolve the next node's host and admit it to the kill switch in place. A host
+// name could not be resolved later, once only the block remains.
+func (r *Runtime) admitNextNode(ctx context.Context, address string) error {
+	r.mu.Lock()
+	present, node := r.firewallState.present, r.nodeHosts
+	r.mu.Unlock()
+
+	if !present || r.cfg.Network.KillSwitch == config.KillSwitchOff {
+		return nil
+	}
+
+	nodeAddress, err := solana.PublicKeyFromBase58(address)
+	if err != nil {
+		return fmt.Errorf("%w: next node address: %w", daemonv1.ErrInvalidArgument, err)
+	}
+
+	nodeAccount, err := r.programClient.FetchNode(ctx, nodeAddress)
+	if err != nil {
+		return fmt.Errorf("fetching next node account %s: %w", nodeAddress, err)
+	}
+
+	uri, err := api.ParsePeerURL(program.NodeURI(nodeAccount.Value))
+	if err != nil {
+		return fmt.Errorf("%w: next node uri: %w", daemonv1.ErrInvalidArgument, err)
+	}
+
+	r.mu.Lock()
+	_, done := r.admitted[uri.Host]
+	r.mu.Unlock()
+
+	if uri.Host == node.uri.Host || done {
+		return nil
+	}
+
+	addrs, err := r.lookupNode(ctx, uri.Host)
+	if err != nil {
+		return err
+	}
+
+	return r.admitToBlock(ctx, uri.Host, addrs)
+}
+
+func (r *Runtime) lookupNode(ctx context.Context, host string) ([]netip.Addr, error) {
 	lctx, cancel := r.withTimeout(ctx)
 	defer cancel()
 
@@ -653,6 +719,7 @@ func (r *Runtime) startTunnel(
 	})
 
 	conn.iface = conn.service.Interface()
+	r.dropPinnedConns("tunnel up")
 
 	return ticket, allowed, nil
 }

@@ -753,8 +753,18 @@ func (x *StartSessionResponse) GetSession() *Session {
 }
 
 type StopSessionRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Id    string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	// keep_kill_switch: a new session follows at once (a server switch). With the kill switch on or
+	// persist, the block stays in place until the next session takes it over or a plain StopSession
+	// releases it, so nothing leaves outside the tunnel between the two sessions. Ignored when the
+	// kill switch is off.
+	KeepKillSwitch bool `protobuf:"varint,2,opt,name=keep_kill_switch,json=keepKillSwitch,proto3" json:"keep_kill_switch,omitempty"`
+	// next_node: with keep_kill_switch, the node address the next session connects to. Before the
+	// session stops, its host is resolved through the still-live tunnel and admitted to the block, so
+	// the next session can reach a node on another host (a host name cannot be resolved once only
+	// the block remains). A node whose host is an IP address is admitted at start even without it.
+	NextNode      string `protobuf:"bytes,3,opt,name=next_node,json=nextNode,proto3" json:"next_node,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -792,6 +802,20 @@ func (*StopSessionRequest) Descriptor() ([]byte, []int) {
 func (x *StopSessionRequest) GetId() string {
 	if x != nil {
 		return x.Id
+	}
+	return ""
+}
+
+func (x *StopSessionRequest) GetKeepKillSwitch() bool {
+	if x != nil {
+		return x.KeepKillSwitch
+	}
+	return false
+}
+
+func (x *StopSessionRequest) GetNextNode() string {
+	if x != nil {
+		return x.NextNode
 	}
 	return ""
 }
@@ -3698,9 +3722,11 @@ const file_daemon_proto_rawDesc = "" +
 	"credential\x12/\n" +
 	"\x05terms\x18\x03 \x01(\v2\x19.sentinel.daemon.v1.TermsR\x05terms\"M\n" +
 	"\x14StartSessionResponse\x125\n" +
-	"\asession\x18\x01 \x01(\v2\x1b.sentinel.daemon.v1.SessionR\asession\"$\n" +
+	"\asession\x18\x01 \x01(\v2\x1b.sentinel.daemon.v1.SessionR\asession\"k\n" +
 	"\x12StopSessionRequest\x12\x0e\n" +
-	"\x02id\x18\x01 \x01(\tR\x02id\"\xaa\x01\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12(\n" +
+	"\x10keep_kill_switch\x18\x02 \x01(\bR\x0ekeepKillSwitch\x12\x1b\n" +
+	"\tnext_node\x18\x03 \x01(\tR\bnextNode\"\xaa\x01\n" +
 	"\x13StopSessionResponse\x125\n" +
 	"\asession\x18\x01 \x01(\v2\x1b.sentinel.daemon.v1.SessionR\asession\x120\n" +
 	"\x14kill_switch_released\x18\x02 \x01(\bR\x12killSwitchReleased\x12*\n" +

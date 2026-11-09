@@ -57,6 +57,7 @@ func (r *Runtime) applyFirewall(
 	r.mu.Lock()
 	r.firewallState = firewallState{present: true}
 	r.nodeHosts = hosts
+	r.admitted = nil
 	r.mu.Unlock()
 
 	row := Firewall{
@@ -86,6 +87,53 @@ func (r *Runtime) applyFirewall(
 	return prior, true, nil
 }
 
+// admitToBlock adds a node host to the kill switch in place, keeping everything it already admits
+// (the block's node, the RPC, the tunnel interface), so a server switch can reach a node on another
+// host without anything leaving outside the block. The next session's own block then replaces it
+// with that node alone. The stored firewall row is left as it was: after a restart the block is
+// rebuilt from it without the extra host, which fails closed.
+func (r *Runtime) admitToBlock(ctx context.Context, host string, addrs []netip.Addr) error {
+	var row Firewall
+	if err := r.findFirst(ctx, &row); err != nil {
+		return fmt.Errorf("reading the kill switch in place: %w", err)
+	}
+
+	nodeAddrs, rpcAndWSAddrs, _, err := parseFirewall(row)
+	if err != nil {
+		return fmt.Errorf("reading the kill switch in place: %w", err)
+	}
+
+	r.mu.Lock()
+	extra := make([][]netip.Addr, 0, len(r.admitted)+2)
+	extra = append(extra, nodeAddrs, addrs)
+	for _, a := range r.admitted {
+		extra = append(extra, a)
+	}
+	r.mu.Unlock()
+
+	actx, cancel := r.withTimeout(ctx)
+	defer cancel()
+
+	if err := r.firewallBackend.Apply(actx, row.Iface, mergeAddrs(extra...), rpcAndWSAddrs, r.cfg.Network.AllowLAN); err != nil {
+		if errors.Is(err, errFirewallChanged) {
+			r.mu.Lock()
+			r.firewallState.present = true
+			r.mu.Unlock()
+		}
+
+		return fmt.Errorf("admitting node %s to the kill switch: %w", host, err)
+	}
+
+	r.mu.Lock()
+	if r.admitted == nil {
+		r.admitted = make(map[string][]netip.Addr)
+	}
+	r.admitted[host] = addrs
+	r.mu.Unlock()
+
+	return nil
+}
+
 func (r *Runtime) flushFirewall(ctx context.Context) error {
 	fctx, cancelFlush := r.withTimeout(ctx)
 	defer cancelFlush()
@@ -106,6 +154,7 @@ func (r *Runtime) flushFirewall(ctx context.Context) error {
 	r.mu.Lock()
 	r.firewallState = firewallState{}
 	r.nodeHosts = nodeHosts{}
+	r.admitted = nil
 	r.mu.Unlock()
 
 	return nil

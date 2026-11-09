@@ -41,6 +41,8 @@ type FakeNodeService struct {
 	ledgerChannel                  solana.PublicKey
 	metadata                       nodeapi.Metadata
 	mu                             sync.Mutex
+	closeGate                      chan struct{}
+	closeEntered                   chan struct{}
 	opened                         []nodeapi.OpenSessionRequest
 	openRejections                 int
 	peerName                       service.Name
@@ -105,6 +107,23 @@ func (f *FakeNodeService) CloseSession(
 	ctx context.Context,
 	req nodeapi.CloseSessionRequestObject,
 ) (nodeapi.CloseSessionResponseObject, error) {
+	f.mu.Lock()
+	gate, entered := f.closeGate, f.closeEntered
+	f.closeEntered = nil
+	f.mu.Unlock()
+
+	if entered != nil {
+		close(entered)
+	}
+
+	if gate != nil {
+		select {
+		case <-gate:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
@@ -881,4 +900,17 @@ func newChannelPosition(metadata nodeapi.Metadata) *fakePosition {
 		Price:           metadata.Settlement.Prices.ChannelPricePerGB,
 		Status:          nodeapi.LedgerStatusOpen,
 	}}
+}
+
+// HoldClose makes CloseSession wait until release is called. entered is closed when the first held close arrives.
+func (f *FakeNodeService) HoldClose() (entered <-chan struct{}, release func()) {
+	gate, in := make(chan struct{}), make(chan struct{})
+
+	f.mu.Lock()
+	f.closeGate, f.closeEntered = gate, in
+	f.mu.Unlock()
+
+	var once sync.Once
+
+	return in, func() { once.Do(func() { close(gate) }) }
 }

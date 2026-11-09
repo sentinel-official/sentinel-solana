@@ -163,6 +163,12 @@ func TestNewUnaryCallCmd_DaemonCommandsThroughRoot(t *testing.T) {
 		},
 		{args: clientArgs("stop", "sess-1"), want: `{"session":null,"kill_switch_released":false,"dns_revert_failed":false}`},
 		{
+			args: clientArgs("stop", "sess-1", "--keep-kill-switch"),
+			want: `{"session":{"id":"sess-1","node":"","status":"","service":"","usage":null,"spent":0,` +
+				`"started_at":null,"ended_at":null,"error":"keep_kill_switch","channel":"","ticket_hash":"",` +
+				`"proxy_endpoint":""},"kill_switch_released":false,"dns_revert_failed":false}`,
+		},
+		{
 			args: clientArgs("tickets"),
 			want: `{"tickets":[{"hash":"hash-1","provider":"prov-addr",` +
 				`"node":"","subscription":"","expires_at":0,"data_cap_bytes":0}]}`,

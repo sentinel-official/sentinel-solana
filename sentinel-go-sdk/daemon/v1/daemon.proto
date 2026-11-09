@@ -82,6 +82,16 @@ message StartSessionResponse {
 
 message StopSessionRequest {
   string id = 1;
+  // keep_kill_switch: a new session follows at once (a server switch). With the kill switch on or
+  // persist, the block stays in place until the next session takes it over or a plain StopSession
+  // releases it, so nothing leaves outside the tunnel between the two sessions. Ignored when the
+  // kill switch is off.
+  bool keep_kill_switch = 2;
+  // next_node: with keep_kill_switch, the node address the next session connects to. Before the
+  // session stops, its host is resolved through the still-live tunnel and admitted to the block, so
+  // the next session can reach a node on another host (a host name cannot be resolved once only
+  // the block remains). A node whose host is an IP address is admitted at start even without it.
+  string next_node = 3;
 }
 
 message StopSessionResponse {

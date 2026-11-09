@@ -109,6 +109,11 @@ func (fakeClientService) StopSession(
 		return nil, err
 	}
 
+	if req.GetKeepKillSwitch() {
+		// Echo the flag so the CLI test sees it reached the request.
+		return &daemonv1.StopSessionResponse{Session: &daemonv1.Session{Id: "sess-1", Error: "keep_kill_switch"}}, nil
+	}
+
 	return &daemonv1.StopSessionResponse{}, nil
 }
 

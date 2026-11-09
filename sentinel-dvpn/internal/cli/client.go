@@ -183,14 +183,29 @@ func newClientStatusCmd(daemon *dialer, printer *Printer) *cobra.Command {
 }
 
 func newClientStopCmd(daemon *dialer, printer *Printer) *cobra.Command {
+	var (
+		keepKillSwitch bool
+		nextNode       string
+	)
+
 	spec := callSpec[daemonv1.StopSessionResponse]{
+		AddFlags: func(fs *pflag.FlagSet) {
+			fs.BoolVar(&keepKillSwitch, "keep-kill-switch", false,
+				"keep the kill switch in place for a session started right after (a server switch)")
+			fs.StringVar(&nextNode, "next-node", "",
+				"with --keep-kill-switch: node `address` the next session connects to (admitted to the kill switch)")
+		},
 		Args:  cobra.ExactArgs(1),
 		Role:  roleClient,
 		Short: "stop a session",
 		Use:   "stop <id>",
 	}
 	newRequest := func(_ *cobra.Command, args []string) (*daemonv1.StopSessionRequest, error) {
-		return &daemonv1.StopSessionRequest{Id: args[0]}, nil
+		if nextNode != "" && !keepKillSwitch {
+			return nil, errors.New("--next-node needs --keep-kill-switch")
+		}
+
+		return &daemonv1.StopSessionRequest{Id: args[0], KeepKillSwitch: keepKillSwitch, NextNode: nextNode}, nil
 	}
 
 	return newUnaryCallCmd(

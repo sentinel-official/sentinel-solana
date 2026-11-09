@@ -26,7 +26,7 @@ func (g *grpcServer) GetSession(
 	ctx context.Context,
 	req *daemonv1.GetSessionRequest,
 ) (*daemonv1.GetSessionResponse, error) {
-	if s, ok := g.runtime.current(); ok && s.ID == req.GetId() {
+	if s, ok := g.runtime.liveSession(req.GetId()); ok {
 		return &daemonv1.GetSessionResponse{Session: toProtoSession(s)}, nil
 	}
 
@@ -63,6 +63,16 @@ func (g *grpcServer) ListSessions(
 	if err := g.runtime.db.WithContext(ctx).Order("started_unix desc").
 		Limit(listSessionsLimit).Find(&sessions).Error; err != nil {
 		return nil, daemonv1.ToStatus(err)
+	}
+
+	// The DB row of the current session can lag its live state (a redial ends the old row before the redial
+	// finishes): list what status says, so `client sessions` and `client status <id>` agree.
+	if current, ok := g.runtime.current(); ok {
+		for i := range sessions {
+			if sessions[i].ID == current.ID {
+				sessions[i] = *current
+			}
+		}
 	}
 
 	response := &daemonv1.ListSessionsResponse{}
@@ -118,7 +128,20 @@ func (g *grpcServer) StopSession(
 		return nil, daemonv1.ToStatus(fmt.Errorf("%w: %w", daemonv1.ErrUnavailable, errRecoveryPending))
 	}
 
-	result, err := g.runtime.stopSessionByID(ctx, reasonStoppedByUser, req.GetId())
+	reason := reasonStoppedByUser
+	if req.GetKeepKillSwitch() {
+		reason = reasonSwitching
+
+		// Before the stop: the next node is resolved through the tunnel still up. On failure the
+		// session stays as it is, and the caller learns the switch cannot go ahead.
+		if next := req.GetNextNode(); next != "" {
+			if err := g.runtime.admitNextNode(ctx, next); err != nil {
+				return nil, daemonv1.ToStatus(fmt.Errorf("admitting the next node to the kill switch: %w", err))
+			}
+		}
+	}
+
+	result, err := g.runtime.stopSessionByID(ctx, reason, req.GetId())
 
 	switch {
 	case errors.Is(err, errMissingSession):
