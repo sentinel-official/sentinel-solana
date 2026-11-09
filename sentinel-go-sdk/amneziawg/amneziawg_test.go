@@ -154,12 +154,9 @@ func TestObfuscation_Validate(t *testing.T) {
 func TestPreflightClient(t *testing.T) {
 	t.Parallel()
 
-	require.Contains(t, amneziawg.PreflightClient("darwin"), service.PreflightCheck{
-		Detail:   "AmneziaWG isn't supported on macOS until upstream awg-quick is fixed (its darwin.bash calls wg)",
-		Name:     "service_platform",
-		OK:       true,
-		Severity: service.SeverityWarning,
-	})
+	for _, check := range amneziawg.PreflightClient("darwin") {
+		require.NotContains(t, check.Detail, "isn't supported", "AmneziaWG runs on macOS")
+	}
 
 	for _, check := range amneziawg.PreflightClient("linux") {
 		require.NotEqual(t, "service_platform", check.Name)

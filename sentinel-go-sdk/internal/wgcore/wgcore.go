@@ -101,6 +101,7 @@ type Variant struct {
 	RunDir              string
 	Templates           fs.FS
 	TunnelBinary        string
+	TunnelPrefix        []string
 	TunnelServicePrefix string
 	UserspaceBinary     string
 }

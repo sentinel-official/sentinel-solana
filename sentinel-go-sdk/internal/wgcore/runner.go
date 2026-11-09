@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"net/netip"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -30,7 +31,13 @@ type quickRunner struct {
 	goos            string
 	runDir          string
 	tunnelBinary    string
+	tunnelPrefix    []string
 	userspaceBinary string
+}
+
+// tunnelArgs puts the variant's prefix (a script run by an interpreter, say) before the action.
+func (r quickRunner) tunnelArgs(action, conf string) []string {
+	return append(slices.Clone(r.tunnelPrefix), action, conf)
 }
 
 func (r quickRunner) Cleanup(ctx context.Context, conf string, owned bool) error {
@@ -64,7 +71,7 @@ func (r quickRunner) Cleanup(ctx context.Context, conf string, owned bool) error
 
 func (r quickRunner) Down(ctx context.Context, conf string) error {
 	cmd := service.Command{
-		Args:  []string{"down", conf},
+		Args:  r.tunnelArgs("down", conf),
 		Path:  r.tunnelBinary,
 		Unset: []string{userspaceEnv},
 	}
@@ -77,7 +84,7 @@ func (r quickRunner) Down(ctx context.Context, conf string) error {
 
 func (r quickRunner) Up(ctx context.Context, conf string) (string, error) {
 	cmd := service.Command{
-		Args:  []string{"up", conf},
+		Args:  r.tunnelArgs("up", conf),
 		Path:  r.tunnelBinary,
 		Unset: []string{userspaceEnv},
 	}
@@ -123,6 +130,7 @@ func newRunner(v Variant) runner {
 		goos:            runtime.GOOS,
 		runDir:          v.RunDir,
 		tunnelBinary:    v.TunnelBinary,
+		tunnelPrefix:    v.TunnelPrefix,
 		userspaceBinary: v.UserspaceBinary,
 	}
 }

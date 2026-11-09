@@ -204,18 +204,27 @@ func DefaultServerConfig() ServerConfig {
 }
 
 func NewClient(_ ClientConfig, p service.Placement, log zerolog.Logger) (service.Client, error) {
-	return wgcore.NewClient[Extensions](variant(), p, log)
+	v := variant()
+
+	if runtime.GOOS == "darwin" {
+		bash, script, err := prepareDarwinQuick(darwinTools(), p)
+		if err != nil {
+			// awg-quick then runs as installed and fails at connect, as it did before.
+			log.Warn().Err(err).Msg("preparing awg-quick for macOS")
+		} else {
+			v.TunnelBinary = bash
+			v.TunnelPrefix = []string{script}
+		}
+	}
+
+	return wgcore.NewClient[Extensions](v, p, log)
 }
 
 func preflightClient(goos string) []service.PreflightCheck {
 	checks := wgcore.PreflightUserspace(variant(), goos)
 
 	if goos == "darwin" {
-		checks = append(checks, service.NewPreflightCheck(
-			"service_platform",
-			service.SeverityWarning,
-			"AmneziaWG isn't supported on macOS until upstream awg-quick is fixed (its darwin.bash calls wg)",
-		))
+		checks = append(checks, darwinQuickChecks(darwinTools())...)
 	}
 
 	return checks

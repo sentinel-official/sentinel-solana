@@ -31,6 +31,7 @@ func NewQuickRunnerForTest(v Variant, goos string, exec execFunc) runner {
 		goos:            goos,
 		runDir:          v.RunDir,
 		tunnelBinary:    v.TunnelBinary,
+		tunnelPrefix:    v.TunnelPrefix,
 		userspaceBinary: v.UserspaceBinary,
 	}
 }
