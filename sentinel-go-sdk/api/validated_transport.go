@@ -75,11 +75,16 @@ func (t *ValidatedTransport) RoundTrip(req *http.Request) (*http.Response, error
 		return nil, fmt.Errorf("%w: %s %s: over %d bytes", ErrResponseTooLarge, req.Method, req.URL.Path, t.maxBytes)
 	}
 
+	checked, err := forwardCompatibleBody(route, resp, body)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %s %s: %s", ErrInvalidResponse, req.Method, req.URL.Path, boundErrorText(err.Error()))
+	}
+
 	options := &openapi3filter.Options{IncludeResponseStatus: true}
 	options.WithCustomSchemaErrorFunc(formatSchemaError)
 
 	input := &openapi3filter.ResponseValidationInput{
-		Body:    io.NopCloser(bytes.NewReader(body)),
+		Body:    io.NopCloser(bytes.NewReader(checked)),
 		Header:  resp.Header,
 		Options: options,
 		RequestValidationInput: &openapi3filter.RequestValidationInput{

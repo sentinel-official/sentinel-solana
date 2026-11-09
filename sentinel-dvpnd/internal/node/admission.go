@@ -44,7 +44,7 @@ func (r *Runtime) acceptVoucher(
 	signer solana.PublicKey,
 	submitted nodeapi.Voucher,
 ) (*Position, error) {
-	position, err := r.refreshPosition(ctx, kind, address)
+	position, err := r.positionForRequest(ctx, kind, address)
 	if err != nil {
 		return nil, err
 	}
@@ -144,7 +144,7 @@ func (r *Runtime) admitChannel(
 	terms *session.Terms,
 	submitted *nodeapi.Voucher,
 ) (*admission, error) {
-	position, err := r.refreshPosition(ctx, KindChannel, address)
+	position, err := r.positionForRequest(ctx, KindChannel, address)
 	if err != nil {
 		return nil, err
 	}

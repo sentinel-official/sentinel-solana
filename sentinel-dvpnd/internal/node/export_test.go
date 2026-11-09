@@ -171,3 +171,5 @@ func SyncConfig(ctx context.Context, r *Runtime) error { return r.syncConfig(ctx
 func SyncPositions(ctx context.Context, r *Runtime) error { return r.syncPositions(ctx) }
 
 func SyncUsage(ctx context.Context, r *Runtime) error { return r.syncUsage(ctx) }
+
+func ChainUnavailable(err error) bool { return chainUnavailable(err) }
