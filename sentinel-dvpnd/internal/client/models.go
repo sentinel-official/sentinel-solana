@@ -10,6 +10,7 @@ const (
 	ChannelStatusOpen    = "open"
 	ChannelStatusPending = "pending"
 	SessionStatusActive  = "active"
+	SessionStatusClosing = "closing"
 	SessionStatusEnded   = "ended"
 )
 

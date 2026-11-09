@@ -13,7 +13,7 @@ auth-user-pass {{ .AuthFile }}
 auth-nocache
 management 127.0.0.1 {{ .ManagementPort }}
 tmp-dir {{ .TmpDir }}
-redirect-gateway def1 ipv6 bypass-dhcp
+redirect-gateway def1{{ if .IPv6 }} ipv6{{ end }} bypass-dhcp
 pull-filter accept "ifconfig "
 pull-filter accept "ifconfig-ipv6 "
 pull-filter accept "topology "

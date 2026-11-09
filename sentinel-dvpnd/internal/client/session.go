@@ -376,11 +376,23 @@ func (r *Runtime) teardown(ctx context.Context, conn *connection, reason string)
 
 	sessionID := conn.session.ID
 
-	closed := conn.remoteClosed
-	if conn.nodeClient != nil {
-		closed = r.closeRemoteSession(ctx, conn.nodeClient, sessionID) || closed
+	// A session tearing down reads "closing" (the app shows "Disconnecting"), not "active", for the
+	// whole teardown -- OpenVPN's slow close keeps stopService busy ~15 s. Persist + notify before the final sample,
+	// closeRemoteSession/stopService so ListSessions (a DB poll) and watchers (the stream) both see it.
+	if sessionID != "" {
+		r.mu.Lock()
+		conn.session.Status = SessionStatusClosing
+		conn.session.UpdatedUnix = time.Now().Unix()
+		snapshot := conn.session
+		r.mu.Unlock()
+		if err := r.save(ctx, &snapshot); err != nil {
+			r.log.Warn().Err(err).Msg("marking the session closing during teardown")
+		}
+		r.notify(&snapshot)
 	}
 
+	// The final sample comes first: closing the session on the node ends the node's side of the tunnel (an
+	// OpenVPN server drops the peer and the client's tun device goes with it), and sampling is local only.
 	finalSample := false
 
 	if conn.service != nil {
@@ -393,7 +405,14 @@ func (r *Runtime) teardown(ctx context.Context, conn *connection, reason string)
 		if err != nil {
 			r.log.Warn().Err(err).Msg("sampling final session usage failed")
 		}
+	}
 
+	closed := conn.remoteClosed
+	if conn.nodeClient != nil {
+		closed = r.closeRemoteSession(ctx, conn.nodeClient, sessionID) || closed
+	}
+
+	if conn.service != nil {
 		r.stopService(ctx, conn.service)
 	}
 

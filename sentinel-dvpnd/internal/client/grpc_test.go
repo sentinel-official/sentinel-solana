@@ -58,9 +58,14 @@ func TestGRPCServer_StartGetWatchStopSession(t *testing.T) {
 	require.Equal(t, client.SessionStatusEnded, stopRes.GetSession().GetStatus())
 	require.True(t, stopRes.GetKillSwitchReleased())
 
+	// Teardown reports "closing" before "ended" (the app shows "Disconnecting" during the slow close).
 	second, err := stream.Recv()
 	require.NoError(t, err)
-	require.Equal(t, client.SessionStatusEnded, second.GetSession().GetStatus())
+	require.Equal(t, client.SessionStatusClosing, second.GetSession().GetStatus())
+
+	third, err := stream.Recv()
+	require.NoError(t, err)
+	require.Equal(t, client.SessionStatusEnded, third.GetSession().GetStatus())
 
 	_, active := client.Current(rt)
 	require.False(t, active)

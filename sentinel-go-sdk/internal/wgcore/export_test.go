@@ -8,7 +8,9 @@ import (
 
 var ErrNameFileEmpty = errNameFileEmpty
 
-func AllowedIPs(goos string) string { return allowedIPs(goos) }
+func AllowedIPs(goos string) string { return allowedIPs(goos, false) }
+
+func AllowedIPsNoIPv6(goos string) string { return allowedIPs(goos, true) }
 
 func ClientPrivateKey[E service.Validator](c *Client[E]) string { return c.privateKey }
 

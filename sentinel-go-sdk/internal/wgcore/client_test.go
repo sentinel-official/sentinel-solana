@@ -48,6 +48,14 @@ func TestAllowedIPs(t *testing.T) {
 	require.Equal(t, "0.0.0.0/1, 128.0.0.0/1, ::/1, 8000::/1", wgcore.AllowedIPs("windows"))
 }
 
+func TestAllowedIPs_NoIPv6(t *testing.T) {
+	t.Parallel()
+
+	require.Equal(t, "0.0.0.0/0", wgcore.AllowedIPsNoIPv6("linux"))
+	require.Equal(t, "0.0.0.0/0", wgcore.AllowedIPsNoIPv6("darwin"))
+	require.Equal(t, "0.0.0.0/1, 128.0.0.0/1", wgcore.AllowedIPsNoIPv6("windows"))
+}
+
 func TestClient_Cleanup_DownsAndRemovesConf(t *testing.T) {
 	t.Parallel()
 
