@@ -13,6 +13,7 @@ import (
 	"github.com/sentinel-official/sentinel-dvpnd/internal/config"
 	"github.com/sentinel-official/sentinel-dvpnd/internal/leftover"
 	"github.com/sentinel-official/sentinel-dvpnd/internal/testutil"
+	"github.com/sentinel-official/sentinel-go-sdk/v3/daemon/instance"
 	"github.com/sentinel-official/sentinel-go-sdk/v3/sdktest"
 	"github.com/sentinel-official/sentinel-go-sdk/v3/service"
 )
@@ -352,4 +353,83 @@ func TestRuntime_StartSession_IncompleteFirewallRowFails(t *testing.T) {
 	_, err := client.StartSession(t.Context(), rt, req)
 	require.ErrorIs(t, err, client.ErrFirewallRowIncomplete)
 	require.Empty(t, firewall.applies())
+}
+
+func TestRuntime_Recover_RemovesRecordedLiveInterface(t *testing.T) {
+	t.Parallel()
+
+	fakeRPC := sdktest.NewFakeRPC(t)
+	home := testutil.NewClientHome(t, fakeRPC)
+	rt := newRuntime(t, home, home.ProgramClient)
+	remover := &testutil.RecordingInterfaceRemover{}
+	client.SetInterfaceRemover(rt, remover)
+	client.SetDNSBackend(rt, &recordingDNSBackend{})
+	client.SetFirewallBackend(rt, &recordingFirewallBackend{})
+
+	// A hard kill left a marker naming a kernel-assigned interface (a macOS utun) that is not the
+	// tag's dvpn-<instance> name. Recovery must remove that interface too, so the CLI's promise —
+	// "start the service to recover and remove it" — holds for utun / OpenVPN, not only WireGuard.
+	marker := filepath.Join(home.Loaded.Dir, instance.TunnelIfaceFileName)
+	require.NoError(t, os.WriteFile(marker, []byte("utun7\n"), 0o600))
+
+	require.NoError(t, rt.Recover(t.Context()))
+
+	require.Contains(t, remover.Names, "utun7")
+	require.Contains(t, remover.Names, home.Loaded.Tag.Interface())
+
+	_, err := os.Stat(marker)
+	require.True(t, os.IsNotExist(err)) // marker cleared on recovery
+}
+
+func TestRuntime_Recover_CopyRemovalBestEffortLiveCleanupFatal(t *testing.T) {
+	t.Parallel()
+
+	setup := func(t *testing.T) *client.Runtime {
+		t.Helper()
+
+		fakeRPC := sdktest.NewFakeRPC(t)
+		home := testutil.NewClientHome(t, fakeRPC)
+		rt := newRuntime(t, home, home.ProgramClient)
+		client.SetInterfaceRemover(rt, &testutil.RecordingInterfaceRemover{})
+		client.SetDNSBackend(rt, &recordingDNSBackend{})
+		client.SetFirewallBackend(rt, &recordingFirewallBackend{})
+		registerFakeClientOnce()
+
+		return rt
+	}
+
+	t.Run("leftover copy removal failure is not fatal", func(t *testing.T) {
+		t.Parallel()
+
+		rt := setup(t)
+		// The service's own (live) cleanup succeeds; only removing a stale tool-dir file copy fails,
+		// as a non-root run hits on a root-owned copy from a prior privileged run. That copy is an old
+		// artifact, not a live leak, so recovery must still succeed.
+		cleanup := func(string) {}
+		client.SetService(rt, sdktest.FakeName, fakeClientConfig{
+			hooks: clientHooks{onCleanup: &cleanup},
+			state: sdktest.NewFakeState(sdktest.FakeName),
+		})
+		client.SetRemoveCopies(rt, func([]string, string) error { return errors.New("permission denied") })
+
+		require.NoError(t, rt.Recover(t.Context()))
+		require.True(t, client.Recovered(rt))
+	})
+
+	t.Run("live service cleanup failure stays fatal", func(t *testing.T) {
+		t.Parallel()
+
+		rt := setup(t)
+		// A failure to tear down the previous run's live state (stale tunnel process / interface /
+		// adapter) must abort start, or the daemon comes up alongside a live stale tunnel.
+		boom := func() error { return errors.New("stopping dvpn-c0: operation not permitted") }
+		client.SetService(rt, sdktest.FakeName, fakeClientConfig{
+			hooks: clientHooks{onCleanupError: &boom},
+			state: sdktest.NewFakeState(sdktest.FakeName),
+		})
+
+		err := rt.Recover(t.Context())
+		require.ErrorIs(t, err, client.ErrServiceCleanupFailed)
+		require.False(t, client.Recovered(rt))
+	})
 }

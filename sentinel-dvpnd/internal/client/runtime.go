@@ -39,6 +39,7 @@ type Runtime struct {
 	cfg                    *config.Client
 	connection             *connection
 	db                     *gorm.DB
+	dir                    string
 	dnsBackend             dnsBackend
 	dnsIface               string
 	firewallBackend        firewallBackend
@@ -61,6 +62,7 @@ type Runtime struct {
 	reconnectAttempts      uint
 	reconnectBackoff       time.Duration
 	recovered              atomic.Bool
+	removeCopies           func([]string, string) error
 	remover                leftover.InterfaceRemover
 	rpcCfg                 cli.RPCConfig
 	sampleInterval         time.Duration
@@ -193,6 +195,7 @@ func New(
 		callTimeout:            callTimeout,
 		cfg:                    loaded.Client,
 		db:                     db,
+		dir:                    loaded.Dir,
 		dnsBackend:             newDNSBackend(loaded.Client.Network.DNSBackend, loaded.Dir),
 		firewallBackend:        newFirewall(loaded.Dir, loaded.Tag.ObjectName()),
 		iface:                  loaded.Tag.Interface(),
@@ -210,6 +213,7 @@ func New(
 		programClient:          programClient,
 		reconnectAttempts:      reconnectAttempts,
 		reconnectBackoff:       reconnectBackoff,
+		removeCopies:           leftover.RemoveCopies,
 		remover:                leftover.NewRemover(),
 		rpcCfg:                 loaded.File.RPC,
 		sampleInterval:         sampleInterval,

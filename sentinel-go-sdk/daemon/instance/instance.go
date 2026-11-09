@@ -21,6 +21,11 @@ const (
 
 const socketFileName = "daemon.sock"
 
+// TunnelIfaceFileName is the per-instance marker, in the instance state dir, that records the
+// live tunnel interface name while a session is up. The daemon writes it on connect and clears
+// it on teardown/recovery; a CLI run while the daemon is down reads it to name a leftover tunnel.
+const TunnelIfaceFileName = "tunnel-iface"
+
 var (
 	ErrInstanceNotFound = errors.New("instance not found")
 	ErrInvalidTag       = errors.New("invalid instance tag")

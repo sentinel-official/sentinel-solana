@@ -145,6 +145,7 @@ func (r *Runtime) clearConnectionLocked() {
 
 	r.connection = nil
 	r.snapshot.Store(nil)
+	removeTunnelIface(r.dir, r.log)
 }
 
 func (r *Runtime) closeRemoteSession(ctx context.Context, client *nodeapi.ClientWithResponses, sessionID string) bool {

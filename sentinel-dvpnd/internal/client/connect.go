@@ -96,6 +96,7 @@ func (r *Runtime) activateSession(
 	r.publishLocked()
 	r.mu.Unlock()
 	r.metrics.sessionsActive.Inc()
+	writeTunnelIface(r.dir, conn.iface, r.log)
 	r.notify(&conn.session)
 
 	return nil

@@ -12,7 +12,6 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/sentinel-official/sentinel-dvpnd/internal/config"
-	"github.com/sentinel-official/sentinel-dvpnd/internal/leftover"
 	"github.com/sentinel-official/sentinel-dvpnd/internal/rpcpin"
 	"github.com/sentinel-official/sentinel-go-sdk/v3/amneziawg"
 	"github.com/sentinel-official/sentinel-go-sdk/v3/api"
@@ -59,6 +58,18 @@ func (r *Runtime) Recover(ctx context.Context) error {
 	if err := r.remover.RemoveInterface(cctx, r.iface); err != nil {
 		return fmt.Errorf("%w: %w", ErrServiceCleanupFailed, err)
 	}
+
+	// RemoveInterface above removes the tag's dvpn-<instance> name. A service that names its own
+	// interface (a macOS utun, an OpenVPN device) recorded the live name in the marker; remove that
+	// too so the leftover a hard kill left behind is gone, which is what the CLI's message promises.
+	// Best-effort: an already-removed interface (e.g. cleared by clearLeftovers) must not fail Recover.
+	if live := readTunnelIface(r.dir); live != "" && live != r.iface {
+		if err := r.remover.RemoveInterface(cctx, live); err != nil {
+			r.log.Warn().Err(err).Str("iface", live).Msg("removing the recorded live tunnel interface")
+		}
+	}
+
+	removeTunnelIface(r.dir, r.log)
 
 	if err := r.dnsBackend.Cleanup(cctx); err != nil {
 		return fmt.Errorf("%w: %w", ErrDNSCleanupFailed, err)
@@ -112,12 +123,22 @@ func (r *Runtime) clearLeftovers(ctx context.Context) error {
 	for _, name := range names {
 		dirs = append(dirs, r.placement(name).ToolDir)
 
+		// clearServiceLeftovers tears down a previous run's LIVE state: a stale tunnel process
+		// (KillStale), the stale interface (the runner's Cleanup), an orphan adapter. A failure
+		// there can leave a live tunnel up, so it stays fatal.
 		if err := r.clearServiceLeftovers(ctx, name); err != nil {
 			result = errors.Join(result, fmt.Errorf("clearing %s leftovers: %w", name, err))
 		}
 	}
 
-	return errors.Join(result, leftover.RemoveCopies(dirs, r.iface))
+	// Removing leftover tool-dir file COPIES is best-effort: a stale copy (e.g. root-owned, from
+	// a prior privileged run, that a later non-root run cannot delete) is an old artifact, not a
+	// live leak, and is overwritten on the next start, so it must not abort recovery.
+	if err := r.removeCopies(dirs, r.iface); err != nil {
+		r.log.Error().Err(err).Msg("removing leftover tool-dir copies; continuing daemon start")
+	}
+
+	return result
 }
 
 func (r *Runtime) clearServiceLeftovers(ctx context.Context, name service.Name) error {

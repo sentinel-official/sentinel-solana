@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -25,6 +26,17 @@ const (
 )
 
 var errRoleNotServed = errors.New("role is not served")
+
+// daemonDownError is the plain-words answer for a daemon that isn't running. The gRPC transport error
+// stays in the chain (errors.As, status.Code) and in the debug log, not in the text the user reads.
+type daemonDownError struct {
+	msg string
+	err error
+}
+
+func (e *daemonDownError) Error() string { return e.msg }
+
+func (e *daemonDownError) Unwrap() error { return e.err }
 
 type callSpec[Resp any] struct {
 	AddFlags func(*pflag.FlagSet)
@@ -85,7 +97,7 @@ func newStreamCallCmd[C, Req, Resp any](
 
 		stream, err := open(newClient(conn), ctx, req)
 		if err != nil {
-			return wrapCallError(spec.Role, daemon.endpointFor(tag), err)
+			return daemon.callError(spec.Role, tag, err)
 		}
 
 		for {
@@ -95,7 +107,7 @@ func newStreamCallCmd[C, Req, Resp any](
 			}
 
 			if err != nil {
-				return wrapCallError(spec.Role, daemon.endpointFor(tag), err)
+				return daemon.callError(spec.Role, tag, err)
 			}
 
 			var result any = resp
@@ -162,7 +174,7 @@ func newUnaryCallCmd[C, Req, Resp any](
 
 		resp, err := call(newClient(conn), ctx, req)
 		if err != nil {
-			return wrapCallError(spec.Role, daemon.endpointFor(tag), err)
+			return daemon.callError(spec.Role, tag, err)
 		}
 
 		if spec.Render != nil {
@@ -187,7 +199,7 @@ func newUnaryCallCmd[C, Req, Resp any](
 	return cmd
 }
 
-func wrapCallError(role, endpoint string, err error) error {
+func wrapCallError(role string, tag instance.Tag, endpoint string, err error, ifaces func() (map[string]bool, error), liveIface func() string) error {
 	if role == "" {
 		role = "daemon"
 	}
@@ -196,8 +208,42 @@ func wrapCallError(role, endpoint string, err error) error {
 		return fmt.Errorf("%s %w: %w", role, errRoleNotServed, err)
 	}
 
+	// Unavailable has two very different causes. A transport failure (gRPC could not reach the socket;
+	// it wraps these as "connection error: ... transport: ...") means the daemon is not running. A
+	// daemon-sent Unavailable is a plain app message (e.g. recovery pending or the daemon stopping): the
+	// daemon IS running but not ready, so telling the user to start it would be wrong and could start a
+	// second daemon onto the held instance. The transport detail ("dial unix ...: connect: ...") adds
+	// nothing the user can act on, so it is kept in the chain and the debug log, not printed.
 	if status.Code(err) == codes.Unavailable {
-		return fmt.Errorf("calling daemon at %s: %w", endpoint, err)
+		if msg := status.Convert(err).Message(); strings.Contains(msg, "connection error") || strings.Contains(msg, "transport:") {
+			// A hard-killed daemon leaves its tunnel interface up with routes still pointing into it; a
+			// graceful stop tears it down. Either way, starting the service recovers and removes it, so
+			// warn when the leftover interface is present. The daemon records the live interface name
+			// (whatever the OS assigned: dvpn-<instance>, a macOS utun, or an OpenVPN/detected name) in
+			// the instance state dir while a session is up; read it here. When the record is absent (old
+			// state, or no session was active) fall back to the dvpn-<instance> name the daemon assigns.
+			want := tag.Interface()
+			if live := liveIface(); live != "" {
+				want = live
+			}
+
+			if names, nerr := ifaces(); nerr == nil && names[want] {
+				return &daemonDownError{
+					msg: fmt.Sprintf("the %s service (instance %s) isn't running, but a tunnel it started (%s) is still up; start the service to recover and remove it: `sentinel-dvpnd service start --instance %s` (or run `sentinel-dvpnd run --instance %s` in a terminal) (%s)",
+						role, tag, want, tag, tag, endpoint),
+					err: err,
+				}
+			}
+
+			return &daemonDownError{
+				msg: fmt.Sprintf("the %s service (instance %s) isn't running: start it with `sentinel-dvpnd service start --instance %s` (or run `sentinel-dvpnd run --instance %s` in a terminal) (%s)",
+					role, tag, tag, tag, endpoint),
+				err: err,
+			}
+		}
+
+		return fmt.Errorf("the %s daemon (instance %s) is not ready (starting up or stopping); try again (%s): %w",
+			role, tag, endpoint, err)
 	}
 
 	return fmt.Errorf("calling daemon: %w", err)

@@ -265,6 +265,7 @@ func preRun(
 
 	*printer = *NewPrinter(cmd.OutOrStdout(), cfg.Output)
 	log := cli.NewLogger(cmd.ErrOrStderr(), cfg.Log)
+	daemon.log = log
 
 	if err := warnDaemonEnv(log); err != nil {
 		return err
