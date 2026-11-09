@@ -3,6 +3,7 @@ package wgcore_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"runtime"
 	"strings"
 	"testing"
@@ -138,6 +139,68 @@ func TestQuickRunner_UpDown(t *testing.T) {
 		{Args: []string{"down", conf}, Path: "wg-quick", Unset: []string{"WG_QUICK_USERSPACE_IMPLEMENTATION"}},
 		{Args: []string{"show", live, "transfer"}, Path: "wg"},
 	}, commands)
+}
+
+// A userspace implementation that failed the trust check is invisible to awg-quick, which then
+// tries the kernel module and fails with a kernel error. The start error names the refused tool,
+// why it was refused and what to do.
+func TestQuickRunner_UpError_NamesARefusedUserspaceTool(t *testing.T) {
+	t.Parallel()
+
+	amneziawg := wgcore.Variant{Binary: "awg", TunnelBinary: "awg-quick", UserspaceBinary: "amneziawg-go"}
+	kernel := errors.New("running awg-quick: exit status 1: [#] ip link add dvpn-n0 type amneziawg\n" +
+		"Error: Unknown device type.\nUnable to access interface: Protocol not supported")
+	refused := fmt.Errorf("%w: /opt/lab/bin/amneziawg-go (owner uid 1000, mode -rwxrwxr-x)", service.ErrUntrustedBinary)
+	run := func(context.Context, service.Command) ([]byte, error) { return nil, kernel }
+
+	cases := []struct {
+		lookErr error
+		name    string
+		want    []string
+		without string
+	}{
+		{
+			lookErr: refused,
+			name:    "refused",
+			want: []string{
+				"amneziawg-go was found but not used, because another account could replace it",
+				"/opt/lab/bin/amneziawg-go (owner uid 1000, mode -rwxrwxr-x)",
+				"owned by root and writable only by root",
+			},
+		},
+		{
+			lookErr: fmt.Errorf("%w: amneziawg-go", service.ErrBinaryNotFound),
+			name:    "absent",
+			without: "found but not used",
+		},
+		{
+			name:    "trusted",
+			without: "found but not used",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			look := func(string) (string, error) { return "/usr/local/bin/amneziawg-go", tc.lookErr }
+			_, err := wgcore.NewQuickRunnerWithLookPathForTest(amneziawg, "linux", run, look).
+				Up(t.Context(), "/etc/amnezia/amneziawg/dvpn-n0.conf")
+			require.ErrorIs(t, err, kernel)
+			require.ErrorContains(t, err, "awg-quick up: running awg-quick")
+
+			for _, want := range tc.want {
+				require.ErrorContains(t, err, want)
+			}
+
+			if tc.lookErr != nil && errors.Is(tc.lookErr, service.ErrUntrustedBinary) {
+				require.ErrorIs(t, err, service.ErrUntrustedBinary)
+			}
+
+			if tc.without != "" {
+				require.NotContains(t, err.Error(), tc.without)
+			}
+		})
+	}
 }
 
 func TestQuickRunner_UpError(t *testing.T) {

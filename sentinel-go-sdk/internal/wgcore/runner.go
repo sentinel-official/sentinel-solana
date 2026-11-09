@@ -26,8 +26,10 @@ type installedFunc func(name string) (bool, error)
 type quickRunner struct {
 	wgCLI
 
-	confinable      bool
-	goos            string
+	confinable bool
+	goos       string
+	// lookPath resolves the userspace implementation to explain a failed start (service.LookPath).
+	lookPath        func(name string) (string, error)
 	runDir          string
 	tunnelBinary    string
 	userspaceBinary string
@@ -88,10 +90,33 @@ func (r quickRunner) Up(ctx context.Context, conf string) (string, error) {
 			return "", fmt.Errorf("this host confines `%s`; load the WireGuard kernel module: %w", r.binary, err)
 		}
 
+		if refused := r.refusedUserspace(); refused != nil {
+			return "", fmt.Errorf("%s up: %w; %w", r.tunnelBinary, err, refused)
+		}
+
 		return "", fmt.Errorf("%s up: %w", r.tunnelBinary, err)
 	}
 
 	return liveInterface(interfaceNameFromConf(conf), r.runDir)
+}
+
+// refusedUserspace explains a failed start when the userspace implementation exists but did not
+// pass the trust check. The tunnel script then never sees it (its PATH holds trusted folders only)
+// and falls back to a kernel module the host may not have, which fails with a kernel error such as
+// "Protocol not supported" that does not name the real cause.
+func (r quickRunner) refusedUserspace() error {
+	if r.lookPath == nil || r.userspaceBinary == "" || r.goos == "windows" {
+		return nil
+	}
+
+	_, err := r.lookPath(r.userspaceBinary)
+	if err == nil || !errors.Is(err, service.ErrUntrustedBinary) {
+		return nil
+	}
+
+	return fmt.Errorf("%s was found but not used, because another account could replace it (%w); "+
+		"install it, and the folders above it, owned by root and writable only by root "+
+		"(for example chmod 755), or load the kernel module", r.userspaceBinary, err)
 }
 
 type runner interface {
@@ -121,6 +146,7 @@ func newRunner(v Variant) runner {
 		wgCLI:           cli,
 		confinable:      v.Confinable,
 		goos:            runtime.GOOS,
+		lookPath:        service.LookPath,
 		runDir:          v.RunDir,
 		tunnelBinary:    v.TunnelBinary,
 		userspaceBinary: v.UserspaceBinary,

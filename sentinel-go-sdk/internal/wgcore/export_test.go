@@ -35,6 +35,17 @@ func NewQuickRunnerForTest(v Variant, goos string, exec execFunc) runner {
 	}
 }
 
+// NewQuickRunnerWithLookPathForTest is NewQuickRunnerForTest with the userspace lookup stubbed.
+func NewQuickRunnerWithLookPathForTest(
+	v Variant, goos string, exec execFunc, lookPath func(string) (string, error),
+) runner {
+	r := NewQuickRunnerForTest(v, goos, exec).(quickRunner) //nolint:forcetypeassert // built just above
+
+	r.lookPath = lookPath
+
+	return r
+}
+
 func NewWindowsServiceRunnerForTest(
 	binary, serviceBinary, tunnelServicePrefix string,
 	exec execFunc,

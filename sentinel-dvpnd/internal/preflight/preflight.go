@@ -8,6 +8,7 @@ import (
 	"os"
 	"runtime"
 	"slices"
+	"strings"
 
 	"github.com/rs/zerolog"
 	"github.com/solana-foundation/solana-go/v2/rpc"
@@ -77,12 +78,11 @@ func Run(
 }
 
 func checkBinaries(name service.Name) error {
-	missing := missingBinaries(name)
-	if len(missing) == 0 {
-		return nil
+	if problem := binariesProblem(name); problem != "" {
+		return errors.New(problem)
 	}
 
-	return fmt.Errorf("missing on PATH: %v", missing)
+	return nil
 }
 
 func checkDNSAt(backend, resolvConf, resolvedProbe string) error {
@@ -219,8 +219,8 @@ func checkRole(ctx context.Context, loaded *config.Loaded, programClient *progra
 		}
 
 		for _, name := range service.Names() {
-			if missing := missingBinaries(name); len(missing) > 0 {
-				checks = append(checks, newWarning("service_binaries_"+name.String(), fmt.Sprintf("missing on PATH: %v", missing)))
+			if problem := binariesProblem(name); problem != "" {
+				checks = append(checks, newWarning("service_binaries_"+name.String(), problem))
 			}
 
 			cfg, ok := loaded.Services[name]
@@ -280,16 +280,50 @@ func hookChecks(
 	return checks
 }
 
-func missingBinaries(name service.Name) []string {
-	var missing []string
+// binariesProblem describes the tools of a service that cannot be run, or returns "". A tool that is
+// installed but refused (another account could replace it) is reported as found and refused, with
+// how to install it, so an operator is not told it is missing when it is there.
+func binariesProblem(name service.Name) string {
+	return binariesProblemOf(service.Binaries(name))
+}
 
-	for _, binary := range service.Binaries(name) {
-		if _, err := service.LookPath(binary); err != nil {
+func binariesProblemOf(binaries []string) string {
+	var missing, refused []string
+
+	for _, binary := range binaries {
+		_, err := service.LookPath(binary)
+
+		switch {
+		case err == nil:
+		case errors.Is(err, service.ErrUntrustedBinary):
+			refused = append(refused, refusedBinary(binary, err, runtime.GOOS))
+		default:
 			missing = append(missing, binary)
 		}
 	}
 
-	return missing
+	var parts []string
+	if len(missing) > 0 {
+		parts = append(parts, fmt.Sprintf("missing on PATH: %v", missing))
+	}
+
+	return strings.Join(append(parts, refused...), "; ")
+}
+
+// refusedBinary names a tool LookPath refused, why, and where to install it instead.
+func refusedBinary(binary string, err error, goos string) string {
+	return fmt.Sprintf("found %s but refused it (%v). %s", binary, err, trustedInstallHint(goos))
+}
+
+func trustedInstallHint(goos string) string {
+	switch goos {
+	case "windows":
+		return "Install it under Program Files, or another folder only Administrators and SYSTEM can change."
+	case "darwin":
+		return "Install it owned by root, mode 0755, in a folder only root can change (e.g. /usr/local/bin)."
+	default:
+		return "Install it owned by root, mode 0755, in a folder only root can change (e.g. /usr/local/bin)."
+	}
 }
 
 func newCheck(name string, err error) service.PreflightCheck {

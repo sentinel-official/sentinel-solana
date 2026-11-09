@@ -6,13 +6,13 @@ import (
 	"fmt"
 	"net"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"slices"
 	"strings"
 
 	"github.com/sentinel-official/sentinel-dvpnd/internal/config"
+	"github.com/sentinel-official/sentinel-go-sdk/v3/service"
 )
 
 const (
@@ -145,11 +145,11 @@ type resolvectlBackend struct{}
 
 func (resolvectlBackend) Apply(ctx context.Context, iface string, servers []string) error {
 	args := append([]string{"dns", iface}, servers...)
-	if output, err := exec.CommandContext(ctx, "resolvectl", args...).CombinedOutput(); err != nil {
+	if output, err := service.CommandContext(ctx, "resolvectl", args...).CombinedOutput(); err != nil {
 		return fmt.Errorf("resolvectl dns: %w: %s", err, output)
 	}
 
-	if output, err := exec.CommandContext(ctx, "resolvectl", "domain", iface, "~.").CombinedOutput(); err != nil {
+	if output, err := service.CommandContext(ctx, "resolvectl", "domain", iface, "~.").CombinedOutput(); err != nil {
 		return fmt.Errorf("resolvectl domain: %w: %s", err, output)
 	}
 
@@ -168,7 +168,7 @@ func (resolvectlBackend) Revert(ctx context.Context, iface string) error {
 		return nil
 	}
 
-	if output, err := exec.CommandContext(ctx, "resolvectl", "revert", iface).CombinedOutput(); err != nil {
+	if output, err := service.CommandContext(ctx, "resolvectl", "revert", iface).CombinedOutput(); err != nil {
 		return fmt.Errorf("resolvectl revert: %w: %s", err, output)
 	}
 

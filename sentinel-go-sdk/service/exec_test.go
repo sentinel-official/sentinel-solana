@@ -68,11 +68,14 @@ func TestLookPath_FindsOnPath(t *testing.T) {
 func TestLookPath_KeepsExplicitPaths(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
 
-	explicit := filepath.Join(t.TempDir(), "tool")
+	explicit := writeExecutable(t, t.TempDir(), binaryName("tool"))
 
 	got, err := service.LookPath(explicit)
 	require.NoError(t, err)
 	require.Equal(t, explicit, got)
+
+	_, err = service.LookPath(filepath.Join(t.TempDir(), "missing-tool"))
+	require.ErrorIs(t, err, service.ErrBinaryNotFound)
 }
 
 func TestLookPath_Missing(t *testing.T) {

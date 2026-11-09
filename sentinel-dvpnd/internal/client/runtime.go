@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
-	"os/exec"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -226,7 +225,7 @@ func runCommand(ctx context.Context, input, name string, args ...string) ([]byte
 		return nil, err
 	}
 
-	cmd := exec.CommandContext(ctx, path, args...)
+	cmd := service.CommandContext(ctx, path, args...)
 	if input != "" {
 		cmd.Stdin = strings.NewReader(input)
 	}
