@@ -360,6 +360,7 @@ func TestRun_RPCUnreachable(t *testing.T) {
 	}
 	checks, err := preflight.Run(t.Context(), loaded, zerolog.Nop(), rpc.New(file.RPC.URL))
 	require.EqualError(t, err, "preflight failed: rpc")
+	require.ErrorIs(t, err, preflight.ErrRPCUnreachable, "an unanswered health check is a network failure")
 
 	byName := testutil.ChecksByName(checks)
 	require.False(t, byName["rpc"].OK)

@@ -8,6 +8,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/rs/zerolog"
 	"github.com/solana-foundation/solana-go/v2"
+	"github.com/solana-foundation/solana-go/v2/rpc"
 	"github.com/spf13/cobra"
 	"gorm.io/gorm"
 
@@ -183,7 +184,21 @@ func NewServiceLifecycleForTest(
 }
 
 func PrepareRuntime(ctx context.Context, rt daemon.Runtime) error {
-	return prepareRuntime(ctx, nil, rt, nil, nil, zerolog.Nop())
+	_, err := prepareRuntime(ctx, nil, rt, nil, nil, zerolog.Nop())
+
+	return err
+}
+
+// PrepareStart runs the startup checks for loaded with no recovery step. waits reports whether the daemon would
+// start serving with the checks deferred to the background.
+func PrepareStart(ctx context.Context, loaded *config.Loaded, rpcClient *rpc.Client) (bool, error) {
+	startup, err := prepareRuntime(ctx, loaded, nil, rpcClient, nil, zerolog.Nop())
+
+	return startup != nil, err
+}
+
+func WaitForChainAccess(ctx context.Context, loaded *config.Loaded, rpcClient *rpc.Client, every time.Duration) error {
+	return waitForChainAccess(ctx, loaded, rpcClient, nil, zerolog.Nop(), every, every)
 }
 
 func PrepareToolDirs(root string, dirs []string) error { return prepareToolDirs(root, dirs) }
@@ -199,7 +214,7 @@ func RenderSystemdSocket() string { return renderSystemdSocket() }
 func Serve(ctx context.Context, loaded *config.Loaded, rt daemon.Runtime, ready daemon.Ready) error {
 	reg := daemon.NewRegistry()
 
-	return serve(ctx, loaded, rt, reg, reg, zerolog.Nop(), ready)
+	return serve(ctx, loaded, rt, reg, reg, zerolog.Nop(), ready, nil)
 }
 
 func ServiceHints(goos string, tag instance.Tag) []string { return serviceHints(goos, tag) }

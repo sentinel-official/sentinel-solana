@@ -27,6 +27,10 @@ const (
 
 var ErrPreflightFailed = errors.New("preflight failed")
 
+// ErrRPCUnreachable marks a preflight that failed only because the configured RPC did not answer its health
+// check (no network yet, a captive portal, rate limiting). The configuration itself was valid.
+var ErrRPCUnreachable = errors.New("rpc")
+
 var (
 	errDNSBackendUnusable        = errors.New("client dns backend is not usable")
 	errKillSwitchBackendUnusable = errors.New("kill switch backend is not usable")
@@ -47,17 +51,20 @@ func Run(
 		return checks, fmt.Errorf("%w: build", ErrPreflightFailed)
 	}
 
-	err = loaded.File.RPC.Validate()
-	if err == nil {
-		rpcCtx, cancel := context.WithTimeout(ctx, loaded.File.RPC.Timeout)
-		_, err = rpcClient.GetHealth(rpcCtx)
+	if err := loaded.File.RPC.Validate(); err != nil {
+		checks = append(checks, newCheck("rpc", err))
 
-		cancel()
+		return checks, fmt.Errorf("%w: rpc", ErrPreflightFailed)
 	}
+
+	rpcCtx, cancel := context.WithTimeout(ctx, loaded.File.RPC.Timeout)
+	_, err = rpcClient.GetHealth(rpcCtx)
+
+	cancel()
 
 	checks = append(checks, newCheck("rpc", err))
 	if err != nil {
-		return checks, fmt.Errorf("%w: rpc", ErrPreflightFailed)
+		return checks, fmt.Errorf("%w: %w", ErrPreflightFailed, ErrRPCUnreachable)
 	}
 
 	if loaded.File.Peer.AllowPrivate {
