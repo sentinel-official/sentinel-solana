@@ -53,6 +53,10 @@ func (c *Client) Cleanup(ctx context.Context) error {
 		return err
 	}
 
+	if err := removeRouteRules(ctx, c.Interface()); err != nil {
+		c.log.Warn().Err(err).Msg("sing-tun policy rules left")
+	}
+
 	return service.RemoveOwned(c.placement.ToolDir, c.placement.Interface)
 }
 
@@ -120,6 +124,13 @@ func (c *Client) Start(ctx context.Context, host string, resp service.PeerRespon
 
 	defer func() {
 		if !succeeded {
+			// A cancelled or failed start (SIGINT mid-connect, a failed readiness probe) can leave
+			// sing-tun's policy rules if hysteria2 brought its tun up before dying; remove them with
+			// the tool-dir copies so a retried connect starts clean.
+			if err := removeRouteRules(context.WithoutCancel(ctx), c.Interface()); err != nil {
+				c.log.Warn().Err(err).Msg("sing-tun policy rules left")
+			}
+
 			_ = service.RemoveOwned(c.placement.ToolDir, c.placement.Interface)
 		}
 	}()
@@ -179,6 +190,16 @@ func (c *Client) Stop(ctx context.Context) error {
 		if !c.process.Started() {
 			return nil
 		}
+
+		// sing-tun removes its policy rules only on a clean exit; after a killed hysteria2 they stay
+		// and route everything to a table nobody serves. Remove them on every exit from here, even
+		// when Terminate fails because the process was already SIGKILL'd (the protocol-kill path),
+		// which is exactly when the rules are left behind.
+		defer func() {
+			if err := removeRouteRules(context.WithoutCancel(ctx), c.Interface()); err != nil {
+				c.log.Warn().Err(err).Msg("sing-tun policy rules left")
+			}
+		}()
 
 		if err := c.process.Terminate(ctx); err != nil {
 			return err
