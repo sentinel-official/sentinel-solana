@@ -135,11 +135,15 @@ func (r *Runtime) buildSweepInstruction(chainCfg dvpn.Config) (solana.Instructio
 	})
 }
 
+// groupDuePositions groups the positions to redeem now. The hourly worker waits for a position to
+// pass the redeem threshold, be closing, or hold a voucher an hour old (fees are batched); with
+// force (an operator's "redeem now") every position with something to claim is due.
 func (r *Runtime) groupDuePositions(
 	ctx context.Context,
 	positions []Position,
 	skip map[string]bool,
 	now int64,
+	force bool,
 ) (map[string]*redeemGroup, uint64) {
 	groups := map[string]*redeemGroup{}
 
@@ -160,7 +164,7 @@ func (r *Runtime) groupDuePositions(
 
 		unredeemed += value
 
-		due := (position.Status == PositionStatusClosing && value > 0) ||
+		due := (force && value > 0) || (position.Status == PositionStatusClosing && value > 0) ||
 			value >= r.cfg.Redeem.ThresholdBaseUnits || (value > 0 && age >= int64(redeemInterval.Seconds()))
 		if !due || skip[position.Address] {
 			continue
@@ -215,7 +219,18 @@ func (r *Runtime) groupDuePositions(
 	return groups, unredeemed
 }
 
-func (r *Runtime) redeem(ctx context.Context) error {
+func (r *Runtime) redeem(ctx context.Context) error { return r.redeemPositions(ctx, false) }
+
+// redeemNow claims every position that has something to claim, below the threshold too.
+func (r *Runtime) redeemNow(ctx context.Context) error { return r.redeemPositions(ctx, true) }
+
+func (r *Runtime) redeemPositions(ctx context.Context, force bool) error {
+	// One pass at a time. The hourly job, position sync and RedeemNow can overlap, and two passes over the same due
+	// positions build the same transaction (same subjects, voucher and recent blockhash), so the second save fails
+	// on the signature's unique key and leaves that batch due. A pass that waits here reads the advanced positions.
+	r.redeemMu.Lock()
+	defer r.redeemMu.Unlock()
+
 	skip, err := r.resolvePendingRedemptions(ctx)
 	if err != nil {
 		return err
@@ -226,7 +241,7 @@ func (r *Runtime) redeem(ctx context.Context) error {
 		return fmt.Errorf("loading positions: %w", err)
 	}
 
-	groups, unredeemed := r.groupDuePositions(ctx, positions, skip, time.Now().Unix())
+	groups, unredeemed := r.groupDuePositions(ctx, positions, skip, time.Now().Unix(), force)
 	r.metrics.unredeemedBaseUnits.Set(float64(unredeemed))
 
 	for _, group := range groups {

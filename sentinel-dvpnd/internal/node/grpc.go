@@ -152,7 +152,7 @@ func (g *grpcServer) RedeemNow(
 	ctx context.Context,
 	_ *daemonv1.RedeemNowRequest,
 ) (*daemonv1.RedeemNowResponse, error) {
-	if err := g.runtime.redeem(ctx); err != nil {
+	if err := g.runtime.redeemNow(ctx); err != nil {
 		return nil, daemonv1.ToStatus(err)
 	}
 

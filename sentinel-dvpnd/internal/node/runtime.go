@@ -82,6 +82,7 @@ type Runtime struct {
 	placement       func(name service.Name) service.Placement
 	privateKey      solana.PrivateKey
 	programClient   *program.Client
+	redeemMu        sync.Mutex
 	remover         leftover.InterfaceRemover
 	sender          *tx.Sender
 	serverCleanup   serverCleanupFunc

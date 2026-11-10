@@ -113,6 +113,8 @@ func Publish(r *Runtime, topic string, frame []byte) { r.events.publish(topic, f
 
 func Redeem(ctx context.Context, r *Runtime) error { return r.redeem(ctx) }
 
+func RedeemNow(ctx context.Context, r *Runtime) error { return r.redeemNow(ctx) }
+
 func RefreshLeaseHealth(ctx context.Context, r *Runtime, now int64) {
 	r.refreshLeaseHealth(ctx, now)
 }
