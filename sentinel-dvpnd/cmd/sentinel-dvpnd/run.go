@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/rs/zerolog"
@@ -32,7 +33,15 @@ import (
 	"github.com/sentinel-official/sentinel-go-sdk/v3/tx"
 )
 
-const storeFileName = "data.db"
+const (
+	storeFileName = "data.db"
+
+	// A client that starts without the RPC retries its startup checks after 5 s, doubling up to once a minute.
+	startupRetryFirst = 5 * time.Second
+	startupRetryMax   = time.Minute
+)
+
+var errWebSocketUnreachable = errors.New("connecting rpc")
 
 var serverRuntimes = map[string]runtimeFactory{} //nolint:gochecknoglobals
 
@@ -55,7 +64,7 @@ func checkWebSocket(ctx context.Context, loaded *config.Loaded, pin *rpcpin.Pin)
 
 	conn, err := loaded.File.RPC.DialWS(ctx)
 	if err != nil {
-		return fmt.Errorf("connecting rpc: %w", err)
+		return fmt.Errorf("%w: %w", errWebSocketUnreachable, err)
 	}
 
 	conn.Close()
@@ -155,26 +164,143 @@ func prepareRuntime(
 	rpcClient *rpc.Client,
 	pin *rpcpin.Pin,
 	log zerolog.Logger,
-) error {
+) (func(context.Context) error, error) {
 	if recoverer, ok := rt.(daemon.Recoverer); ok {
 		if err := recoverer.Recover(ctx); err != nil {
 			if errors.Is(err, client.ErrDNSCleanupFailed) {
-				return fmt.Errorf("recovering dns: %w", err)
+				return nil, fmt.Errorf("recovering dns: %w", err)
 			}
 
 			if errors.Is(err, client.ErrServiceCleanupFailed) {
-				return fmt.Errorf("recovering services: %w", err)
+				return nil, fmt.Errorf("recovering services: %w", err)
 			}
 
 			log.Warn().Err(err).Msg("recovery could not verify the persisted kill switch; StopSession releases it")
 		}
 	}
 
+	// A node or provider whose RPC does not answer at start (down, or rate-limiting it) waits for it.
+	// Exiting put the daemon in a restart loop under its service manager: off-line the whole time,
+	// and adding load to the same RPC.
+	wait := loaded != nil && loaded.Role != config.RoleClient
+
+	err := runStartChecks(ctx, wait, startRetryMinDelay, startRetryMaxDelay, func(ctx context.Context) error {
+		return checkChainAccess(ctx, loaded, rpcClient, pin, log)
+	}, log)
+	if err == nil {
+		return nil, nil
+	}
+
+	// A client does not block on the network here: it has to keep serving its own control API (StopSession is
+	// what releases a kill switch held from an earlier session), and a boot without network yet is normal for it.
+	if loaded.Role != config.RoleClient || !chainUnreachable(err) {
+		return nil, err
+	}
+
+	log.Warn().Err(err).Msg("rpc unreachable at start; serving and waiting for the network")
+
+	return func(ctx context.Context) error {
+		return waitForChainAccess(ctx, loaded, rpcClient, pin, log, startupRetryFirst, startupRetryMax)
+	}, nil
+}
+
+// checkChainAccess runs the preflight and the websocket check that every start needs.
+func checkChainAccess(
+	ctx context.Context,
+	loaded *config.Loaded,
+	rpcClient *rpc.Client,
+	pin *rpcpin.Pin,
+	log zerolog.Logger,
+) error {
 	if _, err := preflight.Run(ctx, loaded, log, rpcClient); err != nil {
 		return err
 	}
 
 	return checkWebSocket(ctx, loaded, pin)
+}
+
+const (
+	startRetryMinDelay = 2 * time.Second
+	startRetryMaxDelay = time.Minute
+)
+
+// runStartChecks runs checks; with wait it retries a preflight.ErrRPCUnreachable with back-off
+// (minDelay doubling up to maxDelay) until the checks pass, fail another way, or ctx ends.
+func runStartChecks(
+	ctx context.Context, wait bool, minDelay, maxDelay time.Duration, checks func(context.Context) error,
+	log zerolog.Logger,
+) error {
+	delay := minDelay
+	started := time.Now()
+
+	for attempt := 1; ; attempt++ {
+		err := checks(ctx)
+		if err == nil && attempt > 1 {
+			log.Info().Int("attempts", attempt).Dur("waited", time.Since(started).Round(time.Second)).
+				Msg("rpc answered; start checks passed")
+		}
+
+		if err == nil || !wait || !errors.Is(err, preflight.ErrRPCUnreachable) {
+			return err
+		}
+
+		log.Warn().Err(err).Dur("retry_in", delay).Msg("rpc unreachable at start; waiting for it")
+
+		select {
+		case <-ctx.Done():
+			return err
+		case <-time.After(delay):
+		}
+
+		delay = min(delay*2, maxDelay)
+	}
+}
+
+// chainUnreachable reports a startup failure caused only by the network: the RPC did not answer, or its
+// websocket could not be dialled. Anything else (configuration, identity, privileges, mint) is not.
+func chainUnreachable(err error) bool {
+	return errors.Is(err, preflight.ErrRPCUnreachable) || errors.Is(err, errWebSocketUnreachable)
+}
+
+// waitForChainAccess retries the startup checks until they pass. It returns nil once they pass or when ctx ends,
+// and an error, which stops the daemon as a failed start would, when the RPC answers but a check still fails.
+func waitForChainAccess(
+	ctx context.Context,
+	loaded *config.Loaded,
+	rpcClient *rpc.Client,
+	pin *rpcpin.Pin,
+	log zerolog.Logger,
+	first, maxWait time.Duration,
+) error {
+	wait := first
+
+	for {
+		timer := time.NewTimer(wait)
+
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+
+			return nil
+		case <-timer.C:
+		}
+
+		err := checkChainAccess(ctx, loaded, rpcClient, pin, log)
+
+		switch {
+		case err == nil:
+			log.Info().Msg("rpc reachable; startup checks passed")
+
+			return nil
+		case ctx.Err() != nil:
+			return nil
+		case !chainUnreachable(err):
+			return fmt.Errorf("startup checks once the rpc answered: %w", err)
+		}
+
+		wait = min(wait*2, maxWait)
+		log.Warn().Err(err).Dur("retry_in", wait).Msg("rpc still unreachable")
+	}
 }
 
 func runInstance(
@@ -260,11 +386,12 @@ func runRuntime(
 		return fmt.Errorf("migrating store: %w", err)
 	}
 
-	if err := prepareRuntime(ctx, loaded, rt, rpcClient, pin, log); err != nil {
+	startup, err := prepareRuntime(ctx, loaded, rt, rpcClient, pin, log)
+	if err != nil {
 		return err
 	}
 
-	return serve(ctx, loaded, rt, reg, roleReg, log, ready)
+	return serve(ctx, loaded, rt, reg, roleReg, log, ready, startup)
 }
 
 func serve(
@@ -275,6 +402,7 @@ func serve(
 	roleReg prometheus.Registerer,
 	log zerolog.Logger,
 	ready daemon.Ready,
+	startup func(context.Context) error,
 ) error {
 	listener, err := daemon.Listen(ctx, loaded.Endpoint(), config.AccessGroup(loaded.Tag, loaded.Dir))
 	if err != nil {
@@ -285,6 +413,10 @@ func serve(
 	server := daemon.NewServer(log, reg)
 
 	var aux []func(context.Context) error
+
+	if startup != nil {
+		aux = append(aux, startup)
+	}
 
 	if loaded.File.Metrics.Enabled {
 		var listenConfig net.ListenConfig

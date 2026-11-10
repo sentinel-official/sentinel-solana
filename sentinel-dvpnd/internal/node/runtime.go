@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/http"
 	"path/filepath"
 	"sync"
 	"time"
@@ -15,6 +16,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/rs/zerolog"
 	"github.com/solana-foundation/solana-go/v2"
+	"github.com/solana-foundation/solana-go/v2/rpc/jsonrpc"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
 	"gorm.io/gorm"
@@ -186,7 +188,7 @@ func (r *Runtime) Start(ctx context.Context) (err error) {
 		}
 	}()
 
-	if err := r.syncChain(ctx); err != nil {
+	if err := r.syncChainAtStart(ctx); err != nil {
 		return err
 	}
 
@@ -282,6 +284,62 @@ func (r *Runtime) stopService(ctx context.Context) {
 
 	if err := r.service.Stop(stopCtx); err != nil {
 		r.log.Warn().Err(err).Msg("stopping service after failed start")
+	}
+}
+
+// startChainRetryFirst, startChainRetryMax: the waits between the start-up chain reads while the
+// RPC answers with a rate limit or a server error. A busy RPC at start is waited out, not fatal.
+var (
+	startChainRetryFirst = time.Second
+	startChainRetryMax   = 30 * time.Second
+)
+
+// jsonRPCRateLimited: the JSON-RPC rate-limit code RPC providers and gateways send inside an HTTP 200.
+const jsonRPCRateLimited = -32429
+
+// rpcBusy: the RPC answered with a rate limit or a server error (HTTP or JSON-RPC 429, -32429, 5xx).
+// The request was fine; the same read succeeds once the RPC has room again.
+func rpcBusy(err error) bool {
+	var rpcErr *jsonrpc.RPCError
+	if errors.As(err, &rpcErr) {
+		return rpcErr.Code == http.StatusTooManyRequests || rpcErr.Code == jsonRPCRateLimited ||
+			rpcErr.Code >= http.StatusInternalServerError
+	}
+
+	var httpErr *jsonrpc.HTTPError
+	if errors.As(err, &httpErr) {
+		return httpErr.Code == http.StatusTooManyRequests || httpErr.Code >= http.StatusInternalServerError
+	}
+
+	return false
+}
+
+// syncChainAtStart: the first chain read of Start, retried while the RPC is busy. Nothing has been
+// started yet, so a retry leaves no state behind; any other error stops Start as before.
+func (r *Runtime) syncChainAtStart(ctx context.Context) error {
+	delay, attempts, started := startChainRetryFirst, 1, time.Now()
+
+	for {
+		err := r.syncChain(ctx)
+		if err == nil && attempts > 1 {
+			r.log.Info().Int("attempts", attempts).Dur("waited", time.Since(started)).
+				Msg("the chain RPC answered; starting")
+		}
+
+		if err == nil || !rpcBusy(err) {
+			return err
+		}
+
+		r.log.Warn().Err(err).Dur("retry_in", delay).Msg("the chain RPC is busy; waiting for it before serving")
+
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("waiting for the rpc: %w", errors.Join(ctx.Err(), err))
+		case <-time.After(delay):
+		}
+
+		attempts++
+		delay = min(2*delay, startChainRetryMax)
 	}
 }
 

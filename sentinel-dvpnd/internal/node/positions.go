@@ -6,9 +6,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
+	"strings"
 	"time"
 
 	"github.com/solana-foundation/solana-go/v2"
+	"github.com/solana-foundation/solana-go/v2/rpc/jsonrpc"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 
@@ -71,6 +74,62 @@ func (r *Runtime) markPositionClosed(ctx context.Context, position *Position, no
 	}
 
 	return result.RowsAffected != 0, nil
+}
+
+// chainRetryDelays: the waits before each retry of an API-path chain read that hit a rate limit or
+// a server error.
+//
+//nolint:gochecknoglobals // a var so tests can change it
+var chainRetryDelays = []time.Duration{250 * time.Millisecond, 750 * time.Millisecond}
+
+// positionForRequest is refreshPosition for the API paths (views, voucher admission, session start).
+// A read that fails only because the RPC is rate limiting the node or failing is retried after a
+// short wait; if it still fails the request answers api.ErrChainBusy (a 429 the client's transport
+// retries, with a plain reason) instead of a 500 "internal error".
+func (r *Runtime) positionForRequest(ctx context.Context, kind string, address solana.PublicKey) (*Position, error) {
+	position, err := r.refreshPosition(ctx, kind, address)
+
+	for _, delay := range chainRetryDelays {
+		if err == nil || !chainUnavailable(err) {
+			return position, err
+		}
+
+		select {
+		case <-ctx.Done():
+			return nil, fmt.Errorf("%w: %w", api.ErrChainBusy, err)
+		case <-time.After(delay):
+		}
+
+		position, err = r.refreshPosition(ctx, kind, address)
+	}
+
+	if err == nil || !chainUnavailable(err) {
+		return position, err
+	}
+
+	r.log.Warn().Err(err).Str("position", address.String()).Str("kind", kind).
+		Msg("chain read still unavailable after retries; answering busy")
+
+	return nil, fmt.Errorf("%w: %w", api.ErrChainBusy, err)
+}
+
+// rpcRateLimitCode is the JSON-RPC error code that RPC providers and gateways answer a rate limit
+// with inside an HTTP 200 reply (it is not the HTTP 429 a public RPC sends).
+const rpcRateLimitCode = -32429
+
+// chainUnavailable: a Solana RPC rate limit or server error (JSON-RPC or HTTP 429/5xx, or JSON-RPC
+// -32429).
+func chainUnavailable(err error) bool {
+	if rpcErr, ok := errors.AsType[*jsonrpc.RPCError](err); ok {
+		return rpcErr.Code == http.StatusTooManyRequests || rpcErr.Code == rpcRateLimitCode ||
+			rpcErr.Code >= http.StatusInternalServerError
+	}
+
+	if httpErr, ok := errors.AsType[*jsonrpc.HTTPError](err); ok {
+		return httpErr.Code == http.StatusTooManyRequests || httpErr.Code >= http.StatusInternalServerError
+	}
+
+	return strings.Contains(strings.ToLower(err.Error()), "too many requests")
 }
 
 func (r *Runtime) refreshPosition(ctx context.Context, kind string, address solana.PublicKey) (*Position, error) {

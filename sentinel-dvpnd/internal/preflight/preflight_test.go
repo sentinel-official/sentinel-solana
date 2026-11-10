@@ -360,6 +360,7 @@ func TestRun_RPCUnreachable(t *testing.T) {
 	}
 	checks, err := preflight.Run(t.Context(), loaded, zerolog.Nop(), rpc.New(file.RPC.URL))
 	require.EqualError(t, err, "preflight failed: rpc")
+	require.ErrorIs(t, err, preflight.ErrRPCUnreachable, "an unanswered health check is a network failure")
 
 	byName := testutil.ChecksByName(checks)
 	require.False(t, byName["rpc"].OK)
@@ -388,4 +389,34 @@ func TestRun_WarnsPeerAllowPrivate(t *testing.T) {
 	require.Contains(t, testutil.ChecksByName(checks), "peer_allow_private")
 	require.True(t, testutil.ChecksByName(checks)["peer_allow_private"].OK)
 	require.Equal(t, service.SeverityWarning, testutil.ChecksByName(checks)["peer_allow_private"].Severity)
+}
+
+// An RPC that answers health with a rate limit is "unreachable" (a node waits for it); an invalid rpc
+// config is not.
+func TestRun_RPCRateLimitIsUnreachable(t *testing.T) {
+	t.Parallel()
+
+	limited := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = fmt.Fprint(w, `{"jsonrpc":"2.0","id":1,"error":{"code":-32429,"message":"rate limited"}}`)
+	}))
+	t.Cleanup(limited.Close)
+
+	sdktest.PinBuildIdentity(t, dvpn.ProgramID, solana.PublicKey{1})
+
+	file := config.DefaultFile("localnet")
+	file.RPC.URL = limited.URL
+	file.RPC.WSURL = "ws" + strings.TrimPrefix(limited.URL, "http")
+	client := config.DefaultClient()
+	client.Network.DNSBackend = config.DNSNone
+	loaded := &config.Loaded{Client: &client, File: file, Role: config.RoleClient}
+
+	_, err := preflight.Run(t.Context(), loaded, zerolog.Nop(), rpc.New(limited.URL))
+	require.ErrorIs(t, err, preflight.ErrRPCUnreachable)
+	require.EqualError(t, err, "preflight failed: rpc")
+
+	loaded.File.RPC.URL = ""
+	_, err = preflight.Run(t.Context(), loaded, zerolog.Nop(), rpc.New(limited.URL))
+	require.ErrorIs(t, err, preflight.ErrPreflightFailed)
+	require.NotErrorIs(t, err, preflight.ErrRPCUnreachable)
 }

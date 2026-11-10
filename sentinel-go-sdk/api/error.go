@@ -8,12 +8,17 @@ import (
 	"io"
 	"net/http"
 	"slices"
+	"strconv"
 
 	"github.com/gin-gonic/gin"
+	"github.com/solana-foundation/solana-go/v2/rpc/jsonrpc"
 
 	"github.com/sentinel-official/sentinel-go-sdk/v3/auth"
 	"github.com/sentinel-official/sentinel-programs/clients/go/core"
 )
+
+// defaultRetryAfterSeconds is the Retry-After sent with a 429 that did not set its own.
+const defaultRetryAfterSeconds = 2
 
 const (
 	CodeBadRequest              = "bad_request"
@@ -130,6 +135,14 @@ var (
 		HTTPStatus: http.StatusTooManyRequests,
 		Message:    "rate limited",
 	}
+	// ErrChainBusy: the node could not read the chain because its RPC is rate limiting it or failing.
+	// It keeps the rate_limited code (no new wire code), so a client's transport retries it like any
+	// 429, and the message says what happened in plain words.
+	ErrChainBusy = &Error{
+		Code:       CodeRateLimited,
+		HTTPStatus: http.StatusTooManyRequests,
+		Message:    "the node's network service is busy, try again",
+	}
 	ErrRequestTooLarge = &Error{
 		Code:       CodeRequestTooLarge,
 		HTTPStatus: http.StatusRequestEntityTooLarge,
@@ -184,6 +197,12 @@ func Abort(ginCtx *gin.Context, err error) {
 		_ = ginCtx.Error(err)
 	}
 
+	// The API spec requires Retry-After on every 429, and a validating client rejects a 429 without it.
+	// The rate limiter sets its own value; any other 429 (a busy chain read) gets the default.
+	if apiErr.HTTPStatus == http.StatusTooManyRequests && ginCtx.Writer.Header().Get(retryAfterHeader) == "" {
+		ginCtx.Header(retryAfterHeader, strconv.Itoa(defaultRetryAfterSeconds))
+	}
+
 	body := ErrorResponse{Error: *apiErr}
 
 	ginCtx.AbortWithStatusJSON(apiErr.HTTPStatus, body)
@@ -196,6 +215,24 @@ func AbortRequest(ginCtx *gin.Context, err error) {
 	}
 
 	Abort(ginCtx, apiErr)
+}
+
+// rpcRateLimitCode is the JSON-RPC error code an RPC uses for rate limiting, sent inside an HTTP 200.
+const rpcRateLimitCode = -32429
+
+// chainBusy reports whether err is the chain RPC refusing a read for now: a JSON-RPC 429 or -32429,
+// or an HTTP 429 or 5xx. Any chain read on the request path (an auth grant check, a channel, lease or
+// plan read) then answers ErrChainBusy, a 429 the client retries, instead of a 500.
+func chainBusy(err error) bool {
+	if rpcErr, ok := errors.AsType[*jsonrpc.RPCError](err); ok {
+		return rpcErr.Code == http.StatusTooManyRequests || rpcErr.Code == rpcRateLimitCode
+	}
+
+	if httpErr, ok := errors.AsType[*jsonrpc.HTTPError](err); ok {
+		return httpErr.Code == http.StatusTooManyRequests || httpErr.Code >= http.StatusInternalServerError
+	}
+
+	return false
 }
 
 func Codes() []string {
@@ -252,6 +289,8 @@ func classify(err error) *Error {
 		return ErrInvalidTicket
 	case errors.Is(err, core.ErrAccountNotFound), errors.Is(err, core.ErrOwnerMismatch):
 		return ErrChannelNotOpen
+	case chainBusy(err):
+		return ErrChainBusy
 	default:
 		return ErrInternal
 	}
